@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IndCAD - Home</title>
+    <link rel="stylesheet" href="css/home.css">
+</head>
+
+<body>
+    <!-- ═══════════════════ HOME PAGE ═══════════════════ -->
+    <div id="home-page">
+        <!-- Header -->
+        <header id="home-header">
+            <div class="header-left">
+                <div class="logo">
+                    <svg width="32" height="32" viewBox="0 0 32 32">
+                        <rect x="2" y="2" width="28" height="28" rx="4" fill="none" stroke="#00d4ff" stroke-width="2" />
+                        <line x1="8" y1="24" x2="24" y2="8" stroke="#00d4ff" stroke-width="2" />
+                        <circle cx="8" cy="24" r="2" fill="#00ff88" />
+                        <circle cx="24" cy="8" r="2" fill="#00ff88" />
+                        <rect x="12" y="12" width="8" height="8" fill="none" stroke="#58a6ff" stroke-width="1.5" />
+                    </svg>
+                    <span class="logo-text">IndCAD</span>
+                </div>
+            </div>
+            <div class="header-right">
+                <button class="header-btn" id="home-ai-settings-btn" title="AI Configuration">
+                    <span>✨</span> AI Config
+                </button>
+                <button class="header-btn" id="import-btn" title="Import .icad file">
+                    <span>📂</span> Import
+                </button>
+            </div>
+        </header>
+
+        <!-- Hero Section -->
+        <section id="hero">
+            <div class="hero-content">
+                <h1>Welcome to <span class="accent">IndCAD</span></h1>
+                <p class="hero-subtitle">Professional 2D CAD Drawing Application</p>
+                <button class="cta-btn" id="new-project-btn">
+                    <span class="cta-icon">＋</span>
+                    New Project
+                </button>
+            </div>
+        </section>
+
+        <!-- Recent Projects Section -->
+        <section id="recent-section">
+            <div class="section-header">
+                <h2>📁 Recent Projects</h2>
+                <span id="project-count" class="project-count"></span>
+            </div>
+            <div id="projects-grid" class="projects-grid">
+                <!-- Populated by JS -->
+            </div>
+            <div id="empty-state" class="empty-state hidden">
+                <div class="empty-icon">📐</div>
+                <h3>No projects yet</h3>
+                <p>Create your first project to get started</p>
+                <button class="cta-btn small" id="empty-new-btn">Create Project</button>
+            </div>
+        </section>
+    </div>
+
+    <!-- ═══════════════════ NEW PROJECT MODAL ═══════════════════ -->
+    <div id="new-project-modal" class="modal hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h2>Create New Project</h2>
+                <button class="modal-close" id="modal-close-btn">✕</button>
+            </div>
+            <div class="modal-body">
+                <!-- Project Name -->
+                <div class="form-group">
+                    <label for="project-name">Project Name</label>
+                    <input type="text" id="project-name" class="form-input" placeholder="My Drawing" autofocus>
+                </div>
+
+                <!-- Description -->
+                <div class="form-group">
+                    <label for="project-desc">Description <span class="optional">(optional)</span></label>
+                    <input type="text" id="project-desc" class="form-input" placeholder="Brief description...">
+                </div>
+
+                <!-- Template Selection -->
+                <div class="form-group">
+                    <label>Template</label>
+                    <div id="template-grid" class="template-grid">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="cancel-btn">Cancel</button>
+                <button class="btn btn-primary" id="create-btn">
+                    <span>＋</span> Create Project
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Context Menu -->
+    <div id="context-menu" class="context-menu hidden">
+        <div class="ctx-item" data-action="open">📂 Open</div>
+        <div class="ctx-item" data-action="rename">✏️ Rename</div>
+        <div class="ctx-divider"></div>
+        <div class="ctx-item ctx-danger" data-action="delete">🗑️ Delete</div>
+    </div>
+
+    <!-- ═══════════════════ AI CONFIG MODAL ═══════════════════ -->
+    <div id="ai-config-modal" class="modal hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h2>✨ Global AI Configuration</h2>
+                <button class="modal-close" id="ai-modal-close-btn">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="global-api-key">Gemini API Key</label>
+                    <div class="input-with-button">
+                        <input type="password" id="global-api-key" class="form-input"
+                            placeholder="Enter your Gemini API key...">
+                    </div>
+                    <p class="form-hint">This key will be saved globally and used for all your projects.</p>
+                </div>
+                <div id="ai-config-status" class="status-msg hidden"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="ai-cancel-btn">Close</button>
+                <button class="btn btn-primary" id="ai-save-btn">
+                    <span>💾</span> Save Globally
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/home.js"></script>
+</body>
+
+</html>

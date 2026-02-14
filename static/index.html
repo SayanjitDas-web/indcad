@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IndCAD</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body>
+    <!-- ═══════════════════ RIBBON UI ═══════════════════ -->
+    <div id="ribbon-container">
+        <!-- Title Bar / Header -->
+        <div id="app-header">
+            <div class="app-title">IndCAD <span id="project-title" class="project-name">Untitled</span></div>
+            <div class="window-controls">
+                <!-- Placeholder for window controls if needed -->
+            </div>
+        </div>
+
+        <!-- Ribbon Tabs -->
+        <div id="ribbon-tabs">
+            <button class="tab-btn active" data-tab="home">Home</button>
+            <button class="tab-btn" data-tab="annotate">Annotate</button>
+            <button class="tab-btn" data-tab="view">View</button>
+            <div class="tab-spacer"></div>
+            <!-- Quick Access Toolbar (Save, Undo, Redo) -->
+            <div class="quick-access">
+                <button class="qa-btn" data-action="save" title="Save (Ctrl+S)">💾</button>
+                <button class="qa-btn" data-action="undo" title="Undo (Ctrl+Z)">↩️</button>
+                <button class="qa-btn" data-action="redo" title="Redo (Ctrl+Y)">↪️</button>
+            </div>
+        </div>
+
+        <!-- Ribbon Content -->
+        <div id="ribbon-content">
+            <!-- HOME TAB -->
+            <div class="ribbon-tab-panel active" id="tab-home">
+                <!-- Group: Draw -->
+                <div class="ribbon-group">
+                    <div class="group-content">
+                        <button class="ribbon-btn large tool-btn" data-tool="line" title="Line (L)">
+                            <svg viewBox="0 0 24 24">
+                                <line x1="5" y1="19" x2="19" y2="5" stroke="currentColor" stroke-width="2" />
+                            </svg>
+                            <span>Line</span>
+                        </button>
+                        <button class="ribbon-btn large tool-btn" data-tool="polyline" title="Polyline (P)">
+                            <svg viewBox="0 0 24 24">
+                                <polyline points="4,18 8,8 14,14 20,4" fill="none" stroke="currentColor"
+                                    stroke-width="2" />
+                            </svg>
+                            <span>Polyline</span>
+                        </button>
+                        <div class="column-btns">
+                            <button class="ribbon-btn small tool-btn" data-tool="circle" title="Circle (C)">
+                                <svg viewBox="0 0 24 24">
+                                    <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2" />
+                                </svg>
+                                <span>Circle</span>
+                            </button>
+                            <button class="ribbon-btn small tool-btn" data-tool="arc" title="Arc">
+                                <svg viewBox="0 0 24 24">
+                                    <path d="M5 19 A 10 10 0 0 1 19 5" fill="none" stroke="currentColor"
+                                        stroke-width="2" />
+                                </svg>
+                                <span>Arc</span>
+                            </button>
+                            <button class="ribbon-btn small tool-btn" data-tool="rectangle" title="Rectangle (R)">
+                                <svg viewBox="0 0 24 24">
+                                    <rect x="4" y="6" width="16" height="12" fill="none" stroke="currentColor"
+                                        stroke-width="2" />
+                                </svg>
+                                <span>Rect</span>
+                            </button>
+                            <button class="ribbon-btn small tool-btn" data-tool="ellipse" title="Ellipse">
+                                <svg viewBox="0 0 24 24">
+                                    <ellipse cx="12" cy="12" rx="9" ry="6" fill="none" stroke="currentColor"
+                                        stroke-width="2" />
+                                </svg>
+                                <span>Ellipse</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="group-label">Draw</div>
+                </div>
+
+                <div class="ribbon-divider"></div>
+
+                <!-- Group: Modify -->
+                <div class="ribbon-group">
+                    <div class="group-content">
+                        <button class="ribbon-btn large tool-btn" data-tool="select" title="Select (V)">
+                            <svg viewBox="0 0 24 24">
+                                <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51z" fill="currentColor" />
+                            </svg>
+                            <span>Select</span>
+                        </button>
+                        <button class="ribbon-btn large tool-btn" data-tool="trim" title="Trim (TR)">
+                            <svg viewBox="0 0 24 24">
+                                <path
+                                    d="M11.72 9.57a3 3 0 1 0-3.37 4.7 3 3 0 1 0 5.09-2.32L16 9l4.47-5a1 1 0 0 0-1.47-1.35L14.53 7l-2.81 2.57zm-1.87 2.14a1 1 0 1 1 0-1 1 1 0 0 1 0 1zM7 12a1 1 0 1 1-1 1 1 1 0 0 1 1-1zm10.35-6.53L16 6.57 14.73 5.43l1.27-1.12.35-.35z"
+                                    fill="currentColor" />
+                            </svg>
+                            <span>Trim</span>
+                        </button>
+                        <div class="column-btns">
+                            <button class="ribbon-btn small tool-btn" data-tool="offset" title="Offset (OF)">
+                                <svg viewBox="0 0 24 24">
+                                    <path
+                                        d="M21 16.5c0 .38-.21.71-.53.88l-7.97 4.1c-.3.15-.65.15-.95 0l-7.97-4.1c-.32-.17-.53-.5-.53-.88V7.5c0-.38.21-.71.53-.88l7.97-4.1c.3-.15.65-.15.95 0l7.97 4.1c.32.17.53.5.53.88v9zm-1.5 0V7.5L12 3.6 4.5 7.5v9l7.5 3.9 7.5-3.9z"
+                                        fill="currentColor" />
+                                </svg>
+                                <span>Offset</span>
+                            </button>
+                            <button class="ribbon-btn small tool-btn" data-tool="copy" title="Copy (CO)">
+                                <svg viewBox="0 0 24 24">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" fill="none"
+                                        stroke="currentColor" stroke-width="2" />
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none"
+                                        stroke="currentColor" stroke-width="2" />
+                                </svg>
+                                <span>Copy</span>
+                            </button>
+                            <button class="ribbon-btn small tool-btn" data-tool="erase" title="Erase (E)">
+                                <svg viewBox="0 0 24 24">
+                                    <path
+                                        d="M19.83,4.17l-3-3a2,2,0,0,0-2.83,0L2.17,13a2,2,0,0,0,0,2.83l3,3a2,2,0,0,0,2.83,0L19.83,7A2,2,0,0,0,19.83,4.17ZM17,6,15,8,13.59,6.59,15.59,4.59ZM6.59,17,4.59,15,12.17,7.41,14.17,9.41Z"
+                                        fill="currentColor" />
+                                </svg>
+                                <span>Erase</span>
+                            </button>
+                        </div>
+                        <div class="column-btns">
+                            <button class="ribbon-btn small" data-action="delete" title="Delete (Del)">
+                                <svg viewBox="0 0 24 24">
+                                    <path
+                                        d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"
+                                        fill="currentColor" />
+                                </svg>
+                                <span>Delete</span>
+                            </button>
+                            <button class="ribbon-btn small" data-action="selectAll" title="Select All (Ctrl+A)">
+                                <svg viewBox="0 0 24 24">
+                                    <path
+                                        d="M3 5h2V3c-1.1 0-2 .9-2 2zm0 8h2v-2H3v2zm4 8h2v-2H7v2zM3 9h2V7H3v2zm10-6h-2v2h2V3zm6 0v2h2c0-1.1-.9-2-2-2zM5 21H3c0 1.1.9 2 2 2v-2zm-2-4h2v-2H3v2zM9 3H7v2h2V3zm2 18h2v-2h-2v2zm8-8h2v-2h-2v2zm0 8c1.1 0 2-.9 2-2h-2v2zm0-12h2V7h-2v2zm0 8h2v-2h-2v2zm-4 4h2v-2h-2v2zm0-16h2V3h-2v2z"
+                                        fill="currentColor" />
+                                </svg>
+                                <span>Select All</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="group-label">Modify</div>
+                </div>
+
+                <div class="ribbon-divider"></div>
+
+                <!-- Group: Project -->
+                <div class="ribbon-group">
+                    <div class="group-content">
+                        <div class="column-btns">
+                            <button class="ribbon-btn small" data-action="new"><span>📄 New Project</span></button>
+                            <button class="ribbon-btn small" data-action="open"><span>📂 Open Project</span></button>
+                            <button class="ribbon-btn small" data-action="saveAs"><span>💾 Save As...</span></button>
+                        </div>
+                        <div class="column-btns">
+                            <button class="ribbon-btn small" data-action="exportPNG"><span>🖼️ Export
+                                    PNG</span></button>
+                            <button class="ribbon-btn small" data-action="exportSVG"><span>🖼️ Export
+                                    SVG</span></button>
+                            <button class="ribbon-btn small" data-action="exportDXF"><span>📐 Export
+                                    DXF</span></button>
+                        </div>
+                        <div class="column-btns">
+                            <button class="ribbon-btn small" id="home-btn" data-action="home"><span>🏠 Home
+                                    Screen</span></button>
+                        </div>
+                    </div>
+                    <div class="group-label">Project</div>
+                </div>
+            </div>
+
+            <!-- ANNOTATE TAB -->
+            <div class="ribbon-tab-panel" id="tab-annotate">
+                <div class="ribbon-group">
+                    <div class="group-content">
+                        <button class="ribbon-btn large tool-btn" data-tool="dimension" title="Dimension">
+                            <svg viewBox="0 0 24 24">
+                                <line x1="4" y1="12" x2="20" y2="12" stroke="currentColor" stroke-width="1.5" />
+                                <line x1="4" y1="8" x2="4" y2="16" stroke="currentColor" stroke-width="1.5" />
+                                <line x1="20" y1="8" x2="20" y2="16" stroke="currentColor" stroke-width="1.5" />
+                            </svg>
+                            <span>Dimension</span>
+                        </button>
+                        <button class="ribbon-btn large tool-btn" data-tool="measure" title="Measure (M)">
+                            <svg viewBox="0 0 24 24">
+                                <line x1="4" y1="20" x2="20" y2="4" stroke="currentColor" stroke-width="1.5"
+                                    stroke-dasharray="4,2" />
+                            </svg>
+                            <span>Measure</span>
+                        </button>
+                        <button class="ribbon-btn large tool-btn" data-tool="text" title="Text (T)">
+                            <svg viewBox="0 0 24 24"><text x="6" y="18" font-size="16" font-weight="bold"
+                                    fill="currentColor">A</text></svg>
+                            <span>Text</span>
+                        </button>
+                    </div>
+                    <div class="group-label">Annotation</div>
+                </div>
+            </div>
+
+            <!-- VIEW TAB -->
+            <div class="ribbon-tab-panel" id="tab-view">
+                <div class="ribbon-group">
+                    <div class="group-content">
+                        <div class="column-btns">
+                            <button class="ribbon-btn small" data-action="zoomIn">🔍 Zoom In</button>
+                            <button class="ribbon-btn small" data-action="zoomOut">🔍 Zoom Out</button>
+                            <button class="ribbon-btn small" data-action="zoomFit">🔲 zoom Fit</button>
+                        </div>
+                    </div>
+                    <div class="group-label">Navigation</div>
+                </div>
+                <div class="ribbon-divider"></div>
+                <div class="ribbon-group">
+                    <div class="group-content">
+                        <div class="column-btns">
+                            <button class="ribbon-btn small" data-action="toggleGrid">▦ Grid</button>
+                            <button class="ribbon-btn small" data-action="toggleSnap">🧲 Snap</button>
+                        </div>
+                    </div>
+                    <div class="group-label">Aids</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════ MAIN LAYOUT ═══════════════════ -->
+    <div id="main-layout">
+        <!-- ─── CENTER: Canvas ─── -->
+        <div id="canvas-container">
+            <canvas id="cad-canvas"></canvas>
+            <!-- Snap indicator overlay -->
+            <div id="snap-indicator" class="hidden">
+                <span id="snap-label"></span>
+            </div>
+        </div>
+
+        <!-- ─── Panel Resizer (Draggable Splitter) ─── -->
+        <div id="panel-resizer"></div>
+
+        <!-- ─── RIGHT: Panels ─── -->
+        <div id="right-panel">
+            <!-- Global Collapse Toggle -->
+            <div id="panel-toggle" title="Toggle Side Panel">◀</div>
+
+            <!-- Layers Panel -->
+            <div class="panel" id="layers-panel">
+                <div class="panel-header collapsible">
+                    <span class="panel-title">Layers</span>
+                    <div class="panel-actions">
+                        <button class="panel-btn" id="add-layer-btn" title="Add Layer">＋</button>
+                        <button class="panel-btn collapse-btn" title="Collapse/Expand">▼</button>
+                    </div>
+                </div>
+                <div class="panel-body" id="layers-list">
+                    <!-- Layers populated by JS -->
+                </div>
+            </div>
+
+            <!-- Properties Panel -->
+            <div class="panel" id="properties-panel">
+                <div class="panel-header collapsible">
+                    <span class="panel-title">Properties</span>
+                    <div class="panel-actions">
+                        <button class="panel-btn collapse-btn" title="Collapse/Expand">▼</button>
+                    </div>
+                </div>
+                <div class="panel-body" id="properties-content">
+                    <div class="prop-empty">No selection</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════ STATUS BAR ═══════════════════ -->
+    <div id="statusbar">
+        <div class="status-section">
+            <span id="status-tool" class="status-item">🔧 Select</span>
+        </div>
+        <div class="status-section">
+            <span id="status-coords" class="status-item">X: 0.00 &nbsp; Y: 0.00</span>
+        </div>
+        <div class="status-section">
+            <span id="status-grid" class="status-item status-toggle active" data-toggle="grid" title="Toggle Grid (G)">▦
+                Grid</span>
+            <div class="status-item status-toggle-group">
+                <span id="status-snap" class="status-item status-toggle active" data-toggle="snap"
+                    title="Toggle Snap (S)">🧲 Snap</span>
+                <span id="snap-menu-toggle" class="status-menu-btn" title="Snap Settings">▾</span>
+                <div id="snap-settings-menu" class="status-dropdown-menu">
+                    <div class="menu-header">
+                        <button class="menu-cmd" data-cmd="snap-all">✓ Enable All</button>
+                        <button class="menu-cmd" data-cmd="snap-none">✗ Disable All</button>
+                    </div>
+                    <div class="menu-divider"></div>
+                    <label class="menu-item">
+                        <input type="checkbox" data-snap="endpoint" checked>
+                        <svg class="snap-icon" viewBox="0 0 16 16">
+                            <rect x="3" y="3" width="10" height="10" fill="none" stroke="currentColor"
+                                stroke-width="2" />
+                        </svg>
+                        <span>Endpoint</span>
+                    </label>
+                    <label class="menu-item">
+                        <input type="checkbox" data-snap="midpoint" checked>
+                        <svg class="snap-icon" viewBox="0 0 16 16">
+                            <path d="M8 3L13 13H3L8 3Z" fill="none" stroke="currentColor" stroke-width="2" />
+                        </svg>
+                        <span>Midpoint</span>
+                    </label>
+                    <label class="menu-item">
+                        <input type="checkbox" data-snap="center" checked>
+                        <svg class="snap-icon" viewBox="0 0 16 16">
+                            <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" />
+                            <circle cx="8" cy="8" r="1" fill="currentColor" />
+                        </svg>
+                        <span>Center</span>
+                    </label>
+                    <label class="menu-item">
+                        <input type="checkbox" data-snap="intersection" checked>
+                        <svg class="snap-icon" viewBox="0 0 16 16">
+                            <path d="M4 4L12 12M12 4L4 12" fill="none" stroke="currentColor" stroke-width="2" />
+                        </svg>
+                        <span>Intersection</span>
+                    </label>
+                    <label class="menu-item">
+                        <input type="checkbox" data-snap="perpendicular" checked>
+                        <svg class="snap-icon" viewBox="0 0 16 16">
+                            <path d="M3 3V13H13M3 8H8V13" fill="none" stroke="currentColor" stroke-width="1.5" />
+                        </svg>
+                        <span>Perpendicular</span>
+                    </label>
+                    <label class="menu-item">
+                        <input type="checkbox" data-snap="nearest" checked>
+                        <svg class="snap-icon" viewBox="0 0 16 16">
+                            <path d="M4 4L12 4L4 12L12 12Z" fill="none" stroke="currentColor" stroke-width="2" />
+                        </svg>
+                        <span>Nearest</span>
+                    </label>
+                    <label class="menu-item">
+                        <input type="checkbox" data-snap="tangent" checked>
+                        <svg class="snap-icon" viewBox="0 0 16 16">
+                            <circle cx="8" cy="9" r="5" fill="none" stroke="currentColor" stroke-width="2" />
+                            <path d="M3 4H13" fill="none" stroke="currentColor" stroke-width="2" />
+                        </svg>
+                        <span>Tangent</span>
+                    </label>
+                    <label class="menu-item">
+                        <input type="checkbox" data-snap="quadrant" checked>
+                        <svg class="snap-icon" viewBox="0 0 16 16">
+                            <path d="M8 3L13 8L8 13L3 8Z" fill="none" stroke="currentColor" stroke-width="2" />
+                        </svg>
+                        <span>Quadrant</span>
+                    </label>
+                    <label class="menu-item">
+                        <input type="checkbox" data-snap="extension" checked>
+                        <svg class="snap-icon" viewBox="0 0 16 16">
+                            <circle cx="4" cy="8" r="1" fill="currentColor" />
+                            <circle cx="8" cy="8" r="1" fill="currentColor" />
+                            <circle cx="12" cy="8" r="1" fill="currentColor" />
+                        </svg>
+                        <span>Extension</span>
+                    </label>
+                    <div class="menu-divider"></div>
+                    <label class="menu-item">
+                        <input type="checkbox" data-snap="grid" checked>
+                        <svg class="snap-icon" viewBox="0 0 16 16">
+                            <path d="M3 3V13M8 3V13M13 3V13M3 3H13M3 8H13M3 13H13" fill="none" stroke="currentColor"
+                                stroke-width="1" />
+                        </svg>
+                        <span>Grid Snap</span>
+                    </label>
+                </div>
+            </div>
+            <span id="status-ortho" class="status-item status-toggle" data-toggle="ortho" title="Toggle Ortho (O)">⊥
+                Ortho</span>
+        </div>
+        <div class="status-section">
+            <span id="status-zoom" class="status-item">🔍 100%</span>
+        </div>
+        <div class="status-section status-right">
+            <input type="text" id="command-input" class="command-input" placeholder="Type command..."
+                spellcheck="false">
+        </div>
+    </div>
+
+    <!-- AI Floating Button -->
+    <button id="ai-toggle-btn" class="ai-fab" title="AI Assistant">
+        <svg viewBox="0 0 24 24">
+            <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z" fill="currentColor"
+                opacity="0.3" />
+            <path d="M12 6a6 6 0 1 0 6 6 6 6 0 0 0-6-6zm0 10a4 4 0 1 1 4-4 4 4 0 0 1-4 4z" fill="currentColor" />
+            <circle cx="12" cy="12" r="2" fill="currentColor">
+                <animate attributeName="opacity" values="1;0.5;1" dur="2s" repeatCount="indefinite" />
+            </circle>
+        </svg>
+    </button>
+
+    <!-- AI Panel -->
+    <div id="ai-panel" class="ai-panel hidden">
+        <div class="ai-panel-header">
+            <span>✨ IndCAD AI Assistant</span>
+            <div class="header-actions">
+                <button id="ai-settings-btn" class="btn-icon" title="AI Settings">⚙️</button>
+                <button id="ai-close-btn" class="btn-icon">&times;</button>
+            </div>
+        </div>
+
+        <!-- AI Settings Section -->
+        <div id="ai-settings" class="ai-settings-panel hidden">
+            <div class="settings-group">
+                <label>Gemini API Key</label>
+                <div class="input-row">
+                    <input type="password" id="ai-api-key-input" placeholder="Enter API Key...">
+                    <button id="ai-save-key-btn" class="btn-save">Save</button>
+                </div>
+                <p class="small-hint">Key is saved for this session.</p>
+            </div>
+        </div>
+
+        <div class="ai-messages" id="ai-messages">
+            <div class="ai-msg bot">Hello! I'm your drawing assistant. How can I help you today?</div>
+            <!-- Loading Indicator -->
+            <div id="ai-loading" class="ai-msg bot ai-loading hidden">
+                <div class="typing-dots">
+                    <span></span><span></span><span></span>
+                </div>
+            </div>
+        </div>
+        <div class="ai-generation-box">
+            <button id="ai-magic-start-btn" class="btn-magic">🪄 Magic Start</button>
+            <button id="ai-export-dxf-btn" class="btn-magic"
+                style="background: linear-gradient(135, #0078d4, #00d4ff);">💾 Export DXF</button>
+            <p class="small-hint">Generate a starting drawing or export to machine</p>
+        </div>
+        <div class="ai-input-box">
+            <input type="text" id="ai-input" placeholder="Ask about your design...">
+            <button id="ai-send-btn" class="btn-icon">➤</button>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/geometry.js"></script>
+    <script src="js/canvas_engine.js"></script>
+    <script src="js/tools.js"></script>
+    <script src="js/panels.js"></script>
+    <script src="js/ui_controller.js"></script>
+    <script src="js/app.js"></script>
+</body>
+
+</html>
