@@ -443,6 +443,9 @@ class IndCADApp {
             case 'exportDXF':
                 this._exportDXF();
                 break;
+            case 'importHTML':
+                this._handleImportHTML();
+                break;
             case 'home':
                 this._goHome();
                 break;
@@ -984,6 +987,30 @@ class IndCADApp {
         document.getElementById('units-scale').value = s.units || 'millimeters';
 
         modal.classList.remove('hidden');
+    }
+
+    async _handleImportHTML() {
+        const html = prompt("Paste your HTML tag or SVG code here:");
+        if (!html) return;
+
+        try {
+            // Import at current mouse world position
+            const mouse = this.engine._lastMouse || { x: 0, y: 0 };
+            const world = this.engine.screenToWorld(mouse.x, mouse.y);
+
+            const result = await this.api.import_html_snippet(html, world.x, world.y);
+            const data = JSON.parse(result);
+            if (data.success) {
+                console.log(`Imported ${data.shapes_count} shapes.`);
+                await this._loadProjectData();
+                this.engine.render();
+            } else {
+                alert("Import failed: " + data.error);
+            }
+        } catch (e) {
+            console.error('HTML Import failed:', e);
+            alert("Error: " + e.message);
+        }
     }
 }
 

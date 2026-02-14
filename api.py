@@ -940,6 +940,19 @@ class Api:
         self.ai.set_api_key(api_key, persist=persist, provider=provider)
         return json.dumps({'success': True})
 
+    def import_html_snippet(self, html_code, x=0, y=0):
+        """Translate HTML/CSS/SVG into CAD shapes and add to project."""
+        from html_cad_kernel import HTMLCADKernel
+        kernel = HTMLCADKernel(base_x=float(x), base_y=float(y))
+        try:
+            shapes = kernel.translate(html_code)
+            for s in shapes:
+                self.pm.add_shape(s)
+            self.sync_project_to_db()
+            return json.dumps({'success': True, 'shapes_count': len(shapes)})
+        except Exception as e:
+            return json.dumps({'success': False, 'error': str(e)})
+
     def get_ai_config(self):
         """Retrieve the current AI configurations (masked keys)."""
         return json.dumps({
