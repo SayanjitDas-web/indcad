@@ -15,6 +15,7 @@ class HomeApp {
         this.api = await this._waitForApi();
         this._bindEvents();
         await this._loadProjects();
+        await this._checkAutoLoad();
     }
 
     _waitForApi() {
@@ -79,17 +80,22 @@ class HomeApp {
     async _showAiModal() {
         const modal = document.getElementById('ai-config-modal');
         const keyInput = document.getElementById('global-api-key');
+        const orKeyInput = document.getElementById('global-or-key');
         const statusMsg = document.getElementById('ai-config-status');
 
         modal.classList.remove('hidden');
         statusMsg.classList.add('hidden');
         keyInput.value = '';
+        orKeyInput.value = '';
 
         try {
             const result = await this.api.get_ai_config();
             const config = JSON.parse(result);
-            if (config.has_key) {
-                keyInput.placeholder = config.api_key;
+            if (config.has_gemini) {
+                keyInput.placeholder = config.gemini_key;
+            }
+            if (config.has_openrouter) {
+                orKeyInput.placeholder = config.openrouter_key;
             }
         } catch (e) {
             console.error('Failed to load AI config:', e);
@@ -102,31 +108,47 @@ class HomeApp {
 
     async _saveGlobalAiKey() {
         const keyInput = document.getElementById('global-api-key');
+        const orKeyInput = document.getElementById('global-or-key');
         const statusMsg = document.getElementById('ai-config-status');
-        const key = keyInput.value.trim();
 
-        if (!key) {
-            statusMsg.textContent = "Please enter a valid API key.";
+        const geminiKey = keyInput.value.trim();
+        const orKey = orKeyInput.value.trim();
+
+        if (!geminiKey && !orKey) {
+            statusMsg.textContent = "Please enter at least one API key.";
             statusMsg.className = "status-msg error";
             statusMsg.classList.remove('hidden');
             return;
         }
 
         try {
-            const result = await this.api.update_ai_config(key, true); // true = persist
-            const data = JSON.parse(result);
-            if (data.success) {
-                statusMsg.textContent = "✅ API Key saved globally!";
+            let success = true;
+            if (geminiKey) {
+                const res = await this.api.update_ai_config(geminiKey, 'gemini', true);
+                if (!JSON.parse(res).success) success = false;
+            }
+            if (orKey) {
+                const res = await this.api.update_ai_config(orKey, 'openrouter', true);
+                if (!JSON.parse(res).success) success = false;
+            }
+
+            if (success) {
+                statusMsg.textContent = "✅ AI Configuration saved globally!";
                 statusMsg.className = "status-msg success";
                 statusMsg.classList.remove('hidden');
                 keyInput.value = '';
-                keyInput.placeholder = "Key saved";
+                orKeyInput.value = '';
 
-                // Close after a short delay
+                // Refresh placeholders
+                const result = await this.api.get_ai_config();
+                const config = JSON.parse(result);
+                if (config.has_gemini) keyInput.placeholder = config.gemini_key;
+                if (config.has_openrouter) orKeyInput.placeholder = config.openrouter_key;
+
                 setTimeout(() => this._hideAiModal(), 1500);
             }
         } catch (e) {
-            statusMsg.textContent = "❌ Error saving key: " + e.message;
+            statusMsg.textContent = "❌ Error saving config: " + e.message;
             statusMsg.className = "status-msg error";
             statusMsg.classList.remove('hidden');
         }
@@ -411,6 +433,23 @@ class HomeApp {
                 const proj = this.projects.find(p => p.id === pid);
                 this._confirmDelete(pid, proj ? proj.name : 'Project');
                 break;
+        }
+    }
+
+    async _checkAutoLoad() {
+        // Check for noautoload param
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('noautoload') === 'true') return;
+
+        try {
+            const result = await this.api.get_last_project();
+            const data = JSON.parse(result);
+            if (data.success && data.project) {
+                console.log('Auto-loading last project:', data.project.id);
+                this._openProject(data.project.id);
+            }
+        } catch (e) {
+            console.error('Auto-load failed:', e);
         }
     }
 }

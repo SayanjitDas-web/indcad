@@ -53,10 +53,24 @@ class Database:
                 value TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS global_blocks (
+                name TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at DESC);
         """)
         conn.commit()
         conn.close()
+
+    def get_last_project_id(self):
+        """Get the ID of the last opened project."""
+        return self.get_setting('last_project_id')
+
+    def set_last_project_id(self, project_id):
+        """Set the ID of the last opened project."""
+        self.set_setting('last_project_id', project_id)
 
     # ──────────────────────── Project CRUD ────────────────────────
 
@@ -118,31 +132,41 @@ class Database:
         name = project_data.get('name', 'Untitled')
 
         conn = self._get_conn()
+        try:
+            if thumbnail:
+                conn.execute("""
+                    UPDATE projects SET name=?, updated_at=?, shape_count=?,
+                    layer_count=?, thumbnail=?, project_data=? WHERE id=?
+                """, (name, now, len(shapes), len(layers), thumbnail,
+                      json.dumps(project_data), project_id))
+            else:
+                conn.execute("""
+                    UPDATE projects SET name=?, updated_at=?, shape_count=?,
+                    layer_count=?, project_data=? WHERE id=?
+                """, (name, now, len(shapes), len(layers),
+                      json.dumps(project_data), project_id))
+            conn.commit()
+        except Exception as e:
+            print(f"Database update failed: {e}")
+        finally:
+            conn.close()
 
-        if thumbnail:
-            conn.execute("""
-                UPDATE projects SET name=?, updated_at=?, shape_count=?,
-                layer_count=?, thumbnail=?, project_data=? WHERE id=?
-            """, (name, now, len(shapes), len(layers), thumbnail,
-                  json.dumps(project_data), project_id))
-        else:
-            conn.execute("""
-                UPDATE projects SET name=?, updated_at=?, shape_count=?,
-                layer_count=?, project_data=? WHERE id=?
-            """, (name, now, len(shapes), len(layers),
-                  json.dumps(project_data), project_id))
-
-        conn.commit()
-        conn.close()
-
-        # Also save to file
+        # Also save to file (Atomic write)
         proj = self.get_project(project_id)
         if proj and proj.get('file_path'):
+            file_path = proj['file_path']
             try:
-                with open(proj['file_path'], 'w') as f:
+                temp_path = file_path + ".tmp"
+                with open(temp_path, 'w') as f:
                     json.dump(project_data, f, indent=2)
-            except Exception:
-                pass
+                
+                # Windows replacement logic
+                if os.path.exists(file_path):
+                    os.replace(temp_path, file_path)
+                else:
+                    os.rename(temp_path, file_path)
+            except Exception as e:
+                print(f"File update failed: {e}")
 
     def delete_project(self, project_id):
         """Delete a project."""
@@ -238,6 +262,42 @@ class Database:
         conn.execute("""
             INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)
         """, (key, str(value)))
+        conn.commit()
+        conn.close()
+
+    # ──────────────────────── Global Blocks ────────────────────────
+
+    def save_global_block(self, name, data):
+        """Save a block definition to the global library."""
+        now = time.time()
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT OR REPLACE INTO global_blocks (name, data, updated_at)
+            VALUES (?, ?, ?)
+        """, (name, json.dumps(data), now))
+        conn.commit()
+        conn.close()
+
+    def get_global_blocks(self):
+        """Get all block names from the global library."""
+        conn = self._get_conn()
+        rows = conn.execute("SELECT name, updated_at FROM global_blocks ORDER BY name ASC").fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def get_global_block(self, name):
+        """Get a specific block definition from the library."""
+        conn = self._get_conn()
+        row = conn.execute("SELECT data FROM global_blocks WHERE name = ?", (name,)).fetchone()
+        conn.close()
+        if row:
+            return json.loads(row['data'])
+        return None
+
+    def delete_global_block(self, name):
+        """Delete a block from the global library."""
+        conn = self._get_conn()
+        conn.execute("DELETE FROM global_blocks WHERE name = ?", (name,))
         conn.commit()
         conn.close()
 

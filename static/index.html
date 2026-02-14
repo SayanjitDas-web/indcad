@@ -22,6 +22,7 @@
         <!-- Ribbon Tabs -->
         <div id="ribbon-tabs">
             <button class="tab-btn active" data-tab="home">Home</button>
+            <button class="tab-btn" data-tab="insert">Insert</button>
             <button class="tab-btn" data-tab="annotate">Annotate</button>
             <button class="tab-btn" data-tab="view">View</button>
             <div class="tab-spacer"></div>
@@ -123,6 +124,17 @@
                                 </svg>
                                 <span>Copy</span>
                             </button>
+                            <button class="ribbon-btn small tool-btn" data-tool="scale" title="Scale (SC)">
+                                <svg viewBox="0 0 24 24">
+                                    <path d="M4 19 L19 4 M19 19 L19 14 M14 19 L19 19" fill="none" stroke="currentColor"
+                                        stroke-width="2" />
+                                    <rect x="2" y="14" width="8" height="8" fill="none" stroke="currentColor"
+                                        stroke-width="1.5" />
+                                    <rect x="8" y="2" width="14" height="14" fill="none" stroke="currentColor"
+                                        stroke-width="1.5" />
+                                </svg>
+                                <span>Scale</span>
+                            </button>
                             <button class="ribbon-btn small tool-btn" data-tool="erase" title="Erase (E)">
                                 <svg viewBox="0 0 24 24">
                                     <path
@@ -130,6 +142,16 @@
                                         fill="currentColor" />
                                 </svg>
                                 <span>Erase</span>
+                            </button>
+                            <button class="ribbon-btn small tool-btn" data-tool="transform" title="Move & Rotate (M)">
+                                <svg viewBox="0 0 24 24">
+                                    <path
+                                        d="M10 9h4V6h3l-5-5-5 5h3v3zm-1 1H6V7l-5 5 5 5v-3h3v-4zm14 2l-5-5v3h-3v4h3v3l5-5zm-9 3h-4v3h-3l5 5 5-5h-3v-3z"
+                                        fill="currentColor" />
+                                    <path d="M12 8a4 4 0 0 1 4 4" fill="none" stroke="currentColor" stroke-width="1.5"
+                                        stroke-linecap="round" />
+                                </svg>
+                                <span>Move+</span>
                             </button>
                         </div>
                         <div class="column-btns">
@@ -181,6 +203,34 @@
                 </div>
             </div>
 
+            <!-- INSERT TAB -->
+            <div class="ribbon-tab-panel" id="tab-insert">
+                <div class="ribbon-group">
+                    <div class="group-content">
+                        <button class="ribbon-btn large tool-btn" data-tool="createBlock" title="Create Block">
+                            <svg viewBox="0 0 24 24">
+                                <path
+                                    d="M21 16.5c0 .38-.21.71-.53.88l-7.97 4.1c-.3.15-.65.15-.95 0l-7.97-4.1c-.32-.17-.53-.5-.53-.88V7.5c0-.38.21-.71.53-.88l7.97-4.1c.3-.15.65-.15.95 0l7.97 4.1c.32.17.53.5.53.88v9z"
+                                    fill="currentColor" opacity="0.3" />
+                                <path d="M12 12l8.5-4.4M12 12v9M12 12L3.5 7.6" stroke="currentColor" stroke-width="2" />
+                                <rect x="14" y="14" width="8" height="8" rx="1" fill="currentColor" />
+                            </svg>
+                            <span>Create Block</span>
+                        </button>
+                        <button class="ribbon-btn large tool-btn" data-tool="insertBlock" title="Insert Block">
+                            <svg viewBox="0 0 24 24">
+                                <path d="M12 2L3 7v10l9 5 9-5V7l-9-5z" fill="none" stroke="currentColor"
+                                    stroke-width="2" />
+                                <path d="M12 22V12m0 0l9-5m-9 5L3 7" stroke="currentColor" stroke-width="1.5" />
+                                <path d="M12 6a2 2 0 1 1 0 4 2 2 0 0 1 0-4z" fill="currentColor" />
+                            </svg>
+                            <span>Insert Block</span>
+                        </button>
+                    </div>
+                    <div class="group-label">Block</div>
+                </div>
+            </div>
+
             <!-- ANNOTATE TAB -->
             <div class="ribbon-tab-panel" id="tab-annotate">
                 <div class="ribbon-group">
@@ -228,6 +278,7 @@
                         <div class="column-btns">
                             <button class="ribbon-btn small" data-action="toggleGrid">▦ Grid</button>
                             <button class="ribbon-btn small" data-action="toggleSnap">🧲 Snap</button>
+                            <button class="ribbon-btn small" data-action="showUnits">📏 Units</button>
                         </div>
                     </div>
                     <div class="group-label">Aids</div>
@@ -279,6 +330,23 @@
                 </div>
                 <div class="panel-body" id="properties-content">
                     <div class="prop-empty">No selection</div>
+                </div>
+            </div>
+
+            <!-- Blocks Panel -->
+            <div class="panel" id="blocks-panel">
+                <div class="panel-header collapsible">
+                    <span class="panel-title">Blocks</span>
+                    <div class="panel-actions">
+                        <button class="panel-btn collapse-btn" title="Collapse/Expand">▼</button>
+                    </div>
+                </div>
+                <div class="panel-tabs">
+                    <button class="panel-tab-btn active" data-block-tab="project">Project</button>
+                    <button class="panel-tab-btn" data-block-tab="library">Library</button>
+                </div>
+                <div class="panel-body" id="blocks-list">
+                    <!-- Blocks populated by JS -->
                 </div>
             </div>
         </div>
@@ -423,11 +491,18 @@
             <div class="settings-group">
                 <label>Gemini API Key</label>
                 <div class="input-row">
-                    <input type="password" id="ai-api-key-input" placeholder="Enter API Key...">
+                    <input type="password" id="ai-api-key-input" placeholder="Enter Gemini Key...">
                     <button id="ai-save-key-btn" class="btn-save">Save</button>
                 </div>
-                <p class="small-hint">Key is saved for this session.</p>
             </div>
+            <div class="settings-group" style="margin-top: 10px;">
+                <label>OpenRouter API Key (Fallback)</label>
+                <div class="input-row">
+                    <input type="password" id="ai-or-key-input" placeholder="Enter OpenRouter Key...">
+                    <button id="ai-save-or-key-btn" class="btn-save">Save</button>
+                </div>
+            </div>
+            <p class="small-hint">Keys are saved for this session.</p>
         </div>
 
         <div class="ai-messages" id="ai-messages">
@@ -451,8 +526,83 @@
         </div>
     </div>
 
+    <!-- ═══════════════════ MODALS ═══════════════════ -->
+    <div id="units-settings-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Drawing Units</h3>
+                <button class="close-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="settings-grid">
+                    <div class="settings-column">
+                        <h4>Length</h4>
+                        <div class="field">
+                            <label>Type:</label>
+                            <select id="unit-type">
+                                <option value="decimal">Decimal</option>
+                                <option value="architectural">Architectural</option>
+                                <option value="engineering">Engineering</option>
+                                <option value="fractional">Fractional</option>
+                                <option value="scientific">Scientific</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label>Precision:</label>
+                            <select id="unit-precision">
+                                <option value="0">0</option>
+                                <option value="1">0.0</option>
+                                <option value="2">0.00</option>
+                                <option value="3">0.000</option>
+                                <option value="4">0.0000</option>
+                                <option value="5">0.00000</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="settings-column">
+                        <h4>Angle</h4>
+                        <div class="field">
+                            <label>Type:</label>
+                            <select id="angle-type">
+                                <option value="decimalDegrees">Decimal Degrees</option>
+                                <option value="degMinSec">Deg/Min/Sec</option>
+                                <option value="grads">Grads</option>
+                                <option value="radians">Radians</option>
+                                <option value="surveyor">Surveyor's Units</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label>Precision:</label>
+                            <select id="angle-precision">
+                                <option value="0">0</option>
+                                <option value="1">0.0</option>
+                                <option value="2">0.00</option>
+                                <option value="3">0.000</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="field" style="margin-top: 20px;">
+                    <label>Insertion Scale:</label>
+                    <select id="units-scale">
+                        <option value="millimeters">Millimeters</option>
+                        <option value="centimeters">Centimeters</option>
+                        <option value="meters">Meters</option>
+                        <option value="inches">Inches</option>
+                        <option value="feet">Feet</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="save-units-btn" class="btn-primary">OK</button>
+                <button class="close-modal btn-secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Scripts -->
     <script src="js/geometry.js"></script>
+    <script src="js/units.js"></script>
     <script src="js/canvas_engine.js"></script>
     <script src="js/tools.js"></script>
     <script src="js/panels.js"></script>

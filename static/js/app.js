@@ -35,12 +35,14 @@ class IndCADApp {
         this._connectKeyboard();
         this._connectStatusBar();
         this._initAI();
+        this._initUnitsSettings();
 
         // Load initial project
         await this._loadProjectData();
-        this._updateProjectTitle();
+        this._syncToEngine();
+        await this._fetchLibraryBlocks();
 
-        // Home button
+        // Check for updates
 
         // Center the view
         this.engine.pan = { x: this.engine.width / 2, y: this.engine.height / 2 };
@@ -82,21 +84,24 @@ class IndCADApp {
     _syncToEngine() {
         if (!this.projectData) return;
 
-        // Update grid settings
         const settings = this.projectData.settings || {};
-        this.engine.gridSize = settings.gridSize || 10;
-        this.engine.gridVisible = settings.gridVisible !== false;
-        this.tools.gridSize = this.engine.gridSize;
-        this.tools.snapEnabled = settings.snapEnabled !== false;
-        this.tools.gridSnap = settings.snapEnabled !== false;
+        const shapes = this.projectData.shapes || [];
 
-        // Filter shapes by layer visibility
-        const shapes = (this.projectData.shapes || []).map(s => {
-            const layer = (this.projectData.layers || []).find(l => l.id === s.layer);
-            return { ...s, _hidden: layer && !layer.visible };
-        });
+        // Update unit settings
+        if (settings.unitType) {
+            Units.updateSettings({
+                unitType: settings.unitType,
+                unitPrecision: settings.unitPrecision,
+                angleType: settings.angleType,
+                anglePrecision: settings.anglePrecision
+            });
+        }
 
         this.engine.setShapes(shapes);
+        this.engine.setBlocks(this.projectData.blocks || {});
+        this.panels.updateBlocks(this.projectData.blocks || {});
+        this._fetchLibraryBlocks();
+        this.engine.render();
     }
 
     _syncPanels() {
@@ -119,7 +124,7 @@ class IndCADApp {
         await this._captureThumbnail();
         await this._autoSave();
         // Navigate to home
-        window.location.href = 'home.html';
+        window.location.href = 'home.html?noautoload=true';
     }
 
     async _captureThumbnail() {
@@ -155,7 +160,9 @@ class IndCADApp {
 
         this.engine.onCoordsChange = (world) => {
             const el = document.getElementById('status-coords');
-            el.textContent = `X: ${world.x.toFixed(2)}  Y: ${world.y.toFixed(2)}`;
+            const x = Units.formatLinear(world.x);
+            const y = Units.formatLinear(world.y);
+            el.textContent = `X: ${x}  Y: ${y}`;
         };
 
         this.engine.onZoomChange = (zoom) => this._updateZoomDisplay();
@@ -220,7 +227,9 @@ class IndCADApp {
                 select: '🔧 Select', line: '📏 Line', rectangle: '⬜ Rectangle',
                 circle: '⭕ Circle', arc: '◠ Arc', ellipse: '⬮ Ellipse',
                 polyline: '📐 Polyline', text: '🅰️ Text', dimension: '↔️ Dimension',
-                measure: '📐 Measure', erase: '🗑️ Erase'
+                measure: '📐 Measure', erase: '🗑️ Erase',
+                transform: '🔧 Move+',
+                createBlock: '📦 Create Block', insertBlock: '📥 Insert Block'
             };
             document.getElementById('status-tool').textContent = names[name] || name;
         };
@@ -300,6 +309,52 @@ class IndCADApp {
                 console.error('Failed to update property:', e);
             }
         };
+
+        this.panels.onInsertBlock = (name) => {
+            this.tools.setTool('insertBlock');
+            const tool = this.tools.tools.insertBlock;
+            if (tool) {
+                tool.blockName = name;
+                document.getElementById('status-tool').textContent = `📥 Insert: ${name}`;
+            }
+        };
+
+        this.panels.onPublishToLibrary = async (name) => {
+            const res = await this.engine.api.publish_block_to_library(name);
+            const data = JSON.parse(res);
+            if (data.success) {
+                await this._fetchLibraryBlocks();
+                alert(`Block "${name}" published to global library.`);
+            } else {
+                alert(`Failed to publish: ${data.error}`);
+            }
+        };
+
+        this.panels.onImportFromLibrary = async (name) => {
+            const res = await this.engine.api.import_block_from_library(name);
+            const data = JSON.parse(res);
+            if (data.success) {
+                await this._loadProjectData(); // Refresh project data to get new block definition
+                this._syncToEngine();
+                // After import, trigger insertion
+                this.panels.onInsertBlock(name);
+            } else {
+                alert(`Failed to import: ${data.error}`);
+            }
+        };
+
+        this.panels.onDeleteFromLibrary = async (name) => {
+            if (confirm(`Delete block "${name}" from global library?`)) {
+                await this.engine.api.delete_library_block(name);
+                await this._fetchLibraryBlocks();
+            }
+        };
+    }
+
+    async _fetchLibraryBlocks() {
+        const res = await this.engine.api.get_library_blocks();
+        const data = JSON.parse(res);
+        this.panels.updateLibraryBlocks(data.blocks || []);
     }
 
     // ──────────────────────── Menu ────────────────────────
@@ -347,7 +402,7 @@ class IndCADApp {
                 // Save current thumbnail and go home to create new project
                 await this._captureThumbnail();
                 await this._autoSave();
-                window.location.href = 'home.html';
+                window.location.href = 'home.html?noautoload=true';
                 break;
 
             case 'open':
@@ -459,6 +514,10 @@ class IndCADApp {
                 // The menu allows individual control. toggleSnap is the MASTER switch.
                 break;
 
+            case 'showUnits':
+                this._showUnitsModal();
+                break;
+
             default:
                 if (action && action.startsWith('tool-')) {
                     this.tools.setTool(action.replace('tool-', ''));
@@ -496,6 +555,12 @@ class IndCADApp {
                 return;
             }
 
+            // Send to active tool first. If handled, skip global shortcuts.
+            if (this.tools.onKeyDown(e.key, e)) {
+                // e.preventDefault(); // Optional: prevent browser defaults if tool handled it
+                return;
+            }
+
             // Tool shortcuts
             switch (e.key.toLowerCase()) {
                 case 'v': this.tools.setTool('select'); break;
@@ -507,7 +572,7 @@ class IndCADApp {
                 case 'o': this.tools.setTool('offset'); break;
                 case 'd': this.tools.setTool('copy'); break; // D for Duplicate/Copy
                 case 'e': this.tools.setTool('erase'); break;
-                case 'm': this.tools.setTool('measure'); break;
+                case 'm': this.tools.setTool('transform'); break;
                 case 'g': this._handleAction('toggleGrid'); break;
                 case 's': this._handleAction('toggleSnap'); break;
                 case 'k': this.tools.orthoMode = !this.tools.orthoMode; // Changed 'd' to 'k' to avoid duplicate case and keep ortho toggle
@@ -568,7 +633,8 @@ class IndCADApp {
             'polyline': 'polyline', 'pl': 'polyline', 'p': 'polyline',
             'text': 'text',
             'dimension': 'dimension', 'dim': 'dimension',
-            'measure': 'measure', 'm': 'measure',
+            'measure': 'measure', 'dist': 'measure',
+            'move': 'transform', 'rotate': 'transform', 'm': 'transform',
             'trim': 'trim', 'tr': 'trim',
             'offset': 'offset', 'off': 'offset', 'o': 'offset',
             'copy': 'copy', 'co': 'copy', 'cp': 'copy',
@@ -577,6 +643,8 @@ class IndCADApp {
             'zoom fit': null, 'zf': null, 'fit': null,
             'undo': null, 'redo': null,
             'grid': null, 'snap': null, 'ortho': null,
+            'block': 'createBlock', 'insert': 'insertBlock', 'i': 'insertBlock',
+            'b': 'createBlock',
         };
 
         if (lower in commandMap) {
@@ -615,6 +683,8 @@ class IndCADApp {
         const settingsPanel = document.getElementById('ai-settings');
         const saveKeyBtn = document.getElementById('ai-save-key-btn');
         const keyInput = document.getElementById('ai-api-key-input');
+        const saveOrKeyBtn = document.getElementById('ai-save-or-key-btn');
+        const orKeyInput = document.getElementById('ai-or-key-input');
 
         if (!toggleBtn || !panel) return;
 
@@ -624,17 +694,33 @@ class IndCADApp {
             settingsPanel.classList.add('hidden');
         });
 
-        settingsBtn.addEventListener('click', () => settingsPanel.classList.toggle('hidden'));
+        settingsBtn.addEventListener('click', () => {
+            const isHidden = settingsPanel.classList.toggle('hidden');
+            if (!isHidden) this._refreshAiConfig();
+        });
 
         saveKeyBtn.addEventListener('click', async () => {
             const key = keyInput.value.trim();
             if (key) {
-                const result = await this.api.update_ai_config(key);
+                const result = await this.api.update_ai_config(key, 'gemini');
                 const data = JSON.parse(result);
                 if (data.success) {
-                    this._addAiMessage("✅ AI API Key updated for this session.", 'bot');
-                    settingsPanel.classList.add('hidden');
+                    this._addAiMessage("✅ Gemini API Key updated.", 'bot');
+                    this._refreshAiConfig();
                     keyInput.value = '';
+                }
+            }
+        });
+
+        saveOrKeyBtn.addEventListener('click', async () => {
+            const key = orKeyInput.value.trim();
+            if (key) {
+                const result = await this.api.update_ai_config(key, 'openrouter');
+                const data = JSON.parse(result);
+                if (data.success) {
+                    this._addAiMessage("✅ OpenRouter API Key updated.", 'bot');
+                    this._refreshAiConfig();
+                    orKeyInput.value = '';
                 }
             }
         });
@@ -729,6 +815,25 @@ class IndCADApp {
         }
     }
 
+    async _refreshAiConfig() {
+        try {
+            const res = await this.api.get_ai_config();
+            const data = JSON.parse(res);
+
+            const geminiInput = document.getElementById('ai-api-key-input');
+            const orInput = document.getElementById('ai-or-key-input');
+
+            if (data.gemini_key) {
+                geminiInput.placeholder = data.gemini_key;
+            }
+            if (data.openrouter_key) {
+                orInput.placeholder = data.openrouter_key;
+            }
+        } catch (e) {
+            console.error('Failed to refresh AI config:', e);
+        }
+    }
+
     _addAiMessage(text, type) {
         const msgContainer = document.getElementById('ai-messages');
         const loading = document.getElementById('ai-loading');
@@ -745,7 +850,14 @@ class IndCADApp {
 
     _renderMarkdown(text) {
         if (!text) return "";
-        let html = text
+
+        // Ensure text is a string
+        text = String(text);
+
+        // Handle code blocks first
+        let html = text.replace(/```(json)?([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+
+        html = html
             .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold
             .replace(/\*(.*?)\*/g, '<em>$1</em>') // Italics
             .replace(/^\* (.*)/gm, '<li>$1</li>') // List items
@@ -816,6 +928,62 @@ class IndCADApp {
         } catch (e) {
             console.error('Export PNG failed:', e);
         }
+    }
+
+    // ──────────────────────── Units Settings ────────────────────────
+
+    _initUnitsSettings() {
+        const modal = document.getElementById('units-settings-modal');
+        if (!modal) return;
+
+        const closeBtns = modal.querySelectorAll('.close-modal');
+        const saveBtn = document.getElementById('save-units-btn');
+
+        closeBtns.forEach(btn => {
+            btn.addEventListener('click', () => modal.classList.add('hidden'));
+        });
+
+        saveBtn.addEventListener('click', async () => {
+            const settings = {
+                unitType: document.getElementById('unit-type').value,
+                unitPrecision: parseInt(document.getElementById('unit-precision').value),
+                angleType: document.getElementById('angle-type').value,
+                anglePrecision: parseInt(document.getElementById('angle-precision').value),
+                units: document.getElementById('units-scale').value
+            };
+
+            try {
+                // Update local data
+                this.projectData.settings = { ...this.projectData.settings, ...settings };
+
+                // Update Units utility
+                Units.updateSettings(settings);
+
+                // Sync to backend
+                await this.api.update_settings(JSON.stringify(settings));
+
+                // Refresh 
+                this._syncToEngine();
+                this._syncPanels();
+                modal.classList.add('hidden');
+            } catch (e) {
+                console.error('Failed to save units settings:', e);
+            }
+        });
+    }
+
+    _showUnitsModal() {
+        const modal = document.getElementById('units-settings-modal');
+        if (!modal || !this.projectData) return;
+
+        const s = this.projectData.settings || {};
+        document.getElementById('unit-type').value = s.unitType || 'decimal';
+        document.getElementById('unit-precision').value = s.unitPrecision !== undefined ? s.unitPrecision : 2;
+        document.getElementById('angle-type').value = s.angleType || 'decimalDegrees';
+        document.getElementById('angle-precision').value = s.anglePrecision !== undefined ? s.anglePrecision : 0;
+        document.getElementById('units-scale').value = s.units || 'millimeters';
+
+        modal.classList.remove('hidden');
     }
 }
 

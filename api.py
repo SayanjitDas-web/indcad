@@ -27,6 +27,72 @@ class Api:
     def set_window(self, window):
         self._window = window
 
+    def _create_file_dialog_safe(self, dialog_type=0, file_types=None, save_filename=None):
+        """Helper to call file dialog with a robust Tkinter primary choice on Windows."""
+        
+        # Windows Check: Prefer Tkinter due to stability issues with native WinForms bridge
+        if os.name == 'nt':
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+                
+                root = tk.Tk()
+                root.withdraw()  # Hide main window
+                root.attributes("-topmost", True)  # Bring to front
+
+                result = None
+                
+                # Convert pywebview filters to Tkinter format: [("Name", "*.ext"), ...]
+                tk_types = []
+                if file_types:
+                    for ft in file_types:
+                        if '(' in ft and ')' in ft:
+                            name = ft.split('(')[0].strip()
+                            ext = ft.split('(')[1].split(')')[0].strip()
+                            tk_types.append((name, ext))
+                        elif '*' in ft:
+                            tk_types.append(("Files", ft))
+                        else:
+                            tk_types.append(("Files", f"*.{ft}"))
+                
+                if not tk_types:
+                    tk_types = [("All files", "*.*")]
+
+                if dialog_type == 0:  # Open
+                    result = filedialog.askopenfilename(filetypes=tk_types)
+                    if result: 
+                        result = [result]  # Return as list/tuple to match pywebview
+                
+                elif dialog_type == 2:  # Save
+                    result = filedialog.asksaveasfilename(
+                        filetypes=tk_types,
+                        initialfile=save_filename,
+                        defaultextension=".icad" if "icad" in str(tk_types) else ""
+                    )
+                
+                elif dialog_type == 1: # Folder
+                    result = filedialog.askdirectory()
+
+                root.destroy()
+                if result:
+                    return result
+            except Exception as tk_e:
+                print(f"!!! Tkinter error: {tk_e}. Falling back to native...")
+
+        # Fallback to native (or primary for non-Windows)
+        try:
+            if self._window:
+                return self._window.create_file_dialog(
+                    dialog_type=dialog_type,
+                    file_types=file_types or ('All files (*.*)',),
+                    save_filename=save_filename
+                )
+        except Exception as e:
+            print(f"!!! Native dialog error: {e}")
+            return None
+        
+        return None
+
     # ──────────────────────── Home / Project Management ────────────────────────
 
     def get_recent_projects(self):
@@ -48,11 +114,9 @@ class Api:
         """Create a new project with template and return its data."""
         result = self.db.create_project(name, description, template)
         self._current_project_id = result['id']
+        self.db.set_last_project_id(self._current_project_id)
         self.pm.file_path = result['file_path']
-        self.pm.project = result['data']
-        self.pm.undo_stack.clear()
-        self.pm.redo_stack.clear()
-        self.pm.dirty = False
+        self.pm.load_project(result['data'])
         return json.dumps(result)
 
     def open_project_by_id(self, project_id):
@@ -79,11 +143,9 @@ class Api:
             return json.dumps({'success': False, 'error': 'Could not load project data'})
 
         self._current_project_id = project_id
+        self.db.set_last_project_id(project_id)
         self.pm.file_path = proj.get('file_path')
-        self.pm.project = project_data
-        self.pm.undo_stack.clear()
-        self.pm.redo_stack.clear()
-        self.pm.dirty = False
+        self.pm.load_project(project_data)
 
         return json.dumps({
             'success': True,
@@ -132,20 +194,28 @@ class Api:
 
     def import_project_file(self):
         """Import an external .icad file via file dialog."""
-        if not self._window:
-            return json.dumps({'success': False, 'error': 'No window'})
-
-        result = self._window.create_file_dialog(
+        result = self._create_file_dialog_safe(
             dialog_type=0,
             file_types=('IndCAD Project (*.icad)', 'All files (*.*)'),
         )
+        
         if result:
             path = result[0] if isinstance(result, (list, tuple)) else result
             if path and os.path.exists(path):
                 imported = self.db.import_project_file(path)
                 if imported:
                     return json.dumps({'success': True, 'project': imported})
-        return json.dumps({'success': False, 'error': 'Cancelled'})
+            
+        return json.dumps({'success': False, 'error': 'Cancelled or Error'})
+
+    def get_last_project(self):
+        """Get the last opened project for auto-loading."""
+        project_id = self.db.get_last_project_id()
+        if project_id:
+            proj = self.db.get_project(project_id)
+            if proj:
+                return json.dumps({'success': True, 'project': proj})
+        return json.dumps({'success': False})
 
     # ──────────────────────── Project Operations ────────────────────────
 
@@ -157,25 +227,30 @@ class Api:
         return json.dumps(self.pm.get_project_data())
 
     def save_project(self):
-        """Save project with native file dialog."""
-        # Also save to DB (compacted)
+        """Save project with robust syncing and backups."""
         if self._current_project_id:
             compact_data = json.loads(self.pm.save_to_json())
             self.db.update_project(self._current_project_id, compact_data)
 
         if self.pm.file_path:
-            with open(self.pm.file_path, 'w') as f:
-                f.write(self.pm.save_to_json())
-            return json.dumps({'success': True, 'path': self.pm.file_path})
+            try:
+                # Create backup before overwrite
+                if os.path.exists(self.pm.file_path):
+                    bak_path = self.pm.file_path + ".bak"
+                    import shutil
+                    shutil.copy2(self.pm.file_path, bak_path)
+                
+                with open(self.pm.file_path, 'w') as f:
+                    f.write(self.pm.save_to_json())
+                return json.dumps({'success': True, 'path': self.pm.file_path})
+            except Exception as e:
+                return json.dumps({'success': False, 'error': f"File write error: {e}"})
 
         return self.save_project_as()
 
     def save_project_as(self):
-        """Save project with 'Save As' dialog."""
-        if not self._window:
-            return json.dumps({'success': False, 'error': 'No window'})
-
-        result = self._window.create_file_dialog(
+        """Save project with 'Save As' dialog and crash protection."""
+        result = self._create_file_dialog_safe(
             dialog_type=2,
             file_types=('IndCAD Project (*.icad)', 'All files (*.*)'),
             save_filename='project.icad'
@@ -193,14 +268,11 @@ class Api:
                     self.db.update_project(self._current_project_id, self.pm.project)
                 return json.dumps({'success': True, 'path': path})
 
-        return json.dumps({'success': False, 'error': 'Cancelled'})
+        return json.dumps({'success': False, 'error': 'Cancelled or Error'})
 
     def load_project(self):
-        """Load project with native file dialog."""
-        if not self._window:
-            return json.dumps({'success': False, 'error': 'No window'})
-
-        result = self._window.create_file_dialog(
+        """Load project with native file dialog and protection."""
+        result = self._create_file_dialog_safe(
             dialog_type=0,
             file_types=('IndCAD Project (*.icad)', 'All files (*.*)'),
         )
@@ -216,10 +288,60 @@ class Api:
                 imported = self.db.import_project_file(path)
                 if imported:
                     self._current_project_id = imported['id']
+                    self.db.set_last_project_id(self._current_project_id)
 
                 return json.dumps({'success': True, 'data': data, 'path': path})
 
-        return json.dumps({'success': False, 'error': 'Cancelled'})
+        return json.dumps({'success': False, 'error': 'Cancelled or Error'})
+
+    # ──────────────────────── Block Operations ────────────────────────
+
+    def create_block(self, name, base_point_json, shape_ids_json):
+        """Create a block definition from selection."""
+        base_point = json.loads(base_point_json)
+        shape_ids = json.loads(shape_ids_json)
+        success = self.pm.create_block(name, base_point, shape_ids)
+        return json.dumps({'success': success})
+
+    def insert_block(self, name, x, y, scale=1.0, rotation=0.0):
+        """Insert a block reference."""
+        success = self.pm.insert_block(name, x, y, scale, rotation)
+        return json.dumps({'success': success})
+
+    def get_blocks(self):
+        """Get all block definition names."""
+        blocks = list(self.pm.project.get('blocks', {}).keys())
+        return json.dumps({'blocks': blocks})
+
+    def publish_block_to_library(self, name):
+        """Save a local block definition to the global library."""
+        blocks = self.pm.project.get('blocks', {})
+        if name in blocks:
+            # We save the shapes as they are in the project (already simplified if compact)
+            self.db.save_global_block(name, blocks[name])
+            return json.dumps({'success': True})
+        return json.dumps({'success': False, 'error': 'Block not found'})
+
+    def get_library_blocks(self):
+        """Get names of all blocks in the global library."""
+        blocks = self.db.get_global_blocks()
+        return json.dumps({'blocks': blocks})
+
+    def import_block_from_library(self, name):
+        """Import a block definition from library into current project."""
+        block_data = self.db.get_global_block(name)
+        if block_data:
+            # Use AddBlockDefinitionCommand to add it to PM (so it's undoable/persistable)
+            from project_manager import AddBlockDefinitionCommand
+            cmd = AddBlockDefinitionCommand(name, block_data)
+            self.pm.execute_command(cmd)
+            return json.dumps({'success': True})
+        return json.dumps({'success': False, 'error': 'Global block not found'})
+
+    def delete_library_block(self, name):
+        """Delete a block from the global library."""
+        self.db.delete_global_block(name)
+        return json.dumps({'success': True})
 
     # ──────────────────────── Shape Operations ────────────────────────
 
@@ -248,6 +370,16 @@ class Api:
         return json.dumps({'success': True})
 
     # ──────────────────────── Undo / Redo ────────────────────────
+
+    def update_settings(self, settings_json):
+        """Update project settings from JSON."""
+        try:
+            settings = json.loads(settings_json)
+            self.pm.update_settings(settings)
+            self.sync_project_to_db()
+            return json.dumps({'success': True})
+        except Exception as e:
+            return json.dumps({'success': False, 'error': str(e)})
 
     def undo(self):
         result = self.pm.undo()
@@ -628,6 +760,29 @@ class Api:
                 
         return json.dumps({'success': True, 'ids': new_ids})
 
+    def scale_shapes(self, shape_ids_json, base_point_json, factor):
+        """Scale multiple shapes."""
+        ids = json.loads(shape_ids_json)
+        base_point = json.loads(base_point_json)
+        # base_point should be [x, y]
+        success = self.pm.scale_shapes(ids, base_point, factor)
+        return json.dumps({'success': success})
+
+    def translate_shapes(self, shape_ids_json, dx, dy):
+        """Move multiple shapes."""
+        ids = json.loads(shape_ids_json)
+        # dx, dy should be floats
+        success = self.pm.translate_shapes(ids, dx, dy)
+        return json.dumps({'success': success})
+
+    def rotate_shapes(self, shape_ids_json, base_point_json, angle_deg):
+        """Rotate multiple shapes."""
+        ids = json.loads(shape_ids_json)
+        base_point = json.loads(base_point_json)
+        # base_point should be [x, y], angle_deg a float
+        success = self.pm.rotate_shapes(ids, base_point, angle_deg)
+        return json.dumps({'success': success})
+
     def update_settings(self, settings_json):
         settings = json.loads(settings_json)
         self.pm.update_settings(settings)
@@ -637,10 +792,7 @@ class Api:
 
     def export_svg(self, svg_content):
         """Export SVG with native save dialog."""
-        if not self._window:
-            return json.dumps({'success': False})
-
-        result = self._window.create_file_dialog(
+        result = self._create_file_dialog_safe(
             dialog_type=2,
             file_types=('SVG Image (*.svg)', 'All files (*.*)'),
             save_filename='drawing.svg'
@@ -655,16 +807,12 @@ class Api:
                     f.write(svg_content)
                 return json.dumps({'success': True, 'path': path})
 
-        return json.dumps({'success': False, 'error': 'Cancelled'})
+        return json.dumps({'success': False, 'error': 'Cancelled or Error'})
 
     def export_png(self, data_url):
         """Export PNG with native save dialog."""
         import base64
-
-        if not self._window:
-            return json.dumps({'success': False})
-
-        result = self._window.create_file_dialog(
+        result = self._create_file_dialog_safe(
             dialog_type=2,
             file_types=('PNG Image (*.png)', 'All files (*.*)'),
             save_filename='drawing.png'
@@ -682,14 +830,11 @@ class Api:
                     f.write(img_data)
                 return json.dumps({'success': True, 'path': path})
 
-        return json.dumps({'success': False, 'error': 'Cancelled'})
+        return json.dumps({'success': False, 'error': 'Cancelled or Error'})
 
     def export_dxf(self):
         """Export current project to DXF with native save dialog."""
-        if not self._window:
-            return json.dumps({'success': False})
-
-        result = self._window.create_file_dialog(
+        result = self._create_file_dialog_safe(
             dialog_type=2,
             file_types=('AutoCAD DXF (*.dxf)', 'All files (*.*)'),
             save_filename='drawing.dxf'
@@ -702,11 +847,11 @@ class Api:
                     path += '.dxf'
                 from dxf_exporter import DXFExporter
                 exporter = DXFExporter()
-                project_data = json.loads(self.pm.save_to_json())
+                project_data = copy.deepcopy(self.pm.project)
                 success = exporter.export(project_data, path)
                 return json.dumps({'success': success, 'path': path})
 
-        return json.dumps({'success': False, 'error': 'Cancelled'})
+        return json.dumps({'success': False, 'error': 'Cancelled or Error'})
 
     def export_dxf_direct(self, filename=None):
         """Export to DXF directly to the exports folder without a dialog."""
@@ -728,7 +873,7 @@ class Api:
         path = os.path.join(exports_dir, filename)
         
         exporter = DXFExporter()
-        project_data = json.loads(self.pm.save_to_json())
+        project_data = copy.deepcopy(self.pm.project)
         success = exporter.export(project_data, path)
         
         if success:
@@ -746,11 +891,18 @@ class Api:
     # ──────────────────────── AI Assistant ────────────────────────
 
     def _get_ai_context(self):
-        """Build summarized project context for the AI."""
+        """Build summarized project context for the AI with layer awareness."""
+        layers = self.pm.project.get('layers', [])
+        active_layer_id = self.pm.project.get('activeLayer', 'layer-0')
+        layer_colors = {l['id']: l.get('color', '#ffffff') for l in layers}
+        
         return {
             'name': self.pm.project.get('name', 'Untitled'),
+            'settings': self.pm.project.get('settings', {}),
             'shapes_count': len(self.pm.project.get('shapes', [])),
-            'layers': len(self.pm.project.get('layers', [])),
+            'layers': layers,
+            'activeLayer': active_layer_id,
+            'activeLayerColor': layer_colors.get(active_layer_id, '#ffffff'),
             'shapes_summary': [
                 {'type': s.get('type', 'unknown'), 'id': s.get('id', 'unknown'), 'layer': s.get('layer', 'Unknown')} 
                 for s in self.pm.project.get('shapes', []) if isinstance(s, dict)
@@ -762,15 +914,16 @@ class Api:
         context = self._get_ai_context()
         result = self.ai.get_chat_response(prompt, context)
         
-        # If result is a dict with drawing commands, add them
-        if isinstance(result, dict) and result.get('draw'):
-            for shape in result['draw']:
-                self.pm.add_shape(shape)
-            self.sync_project_to_db()
+        # If result is already a standardized dict, handle it directly
+        if isinstance(result, dict):
+            if result.get('draw'):
+                for shape in result['draw']:
+                    self.pm.add_shape(shape)
+                self.sync_project_to_db()
             return json.dumps(result)
             
-        # Fallback for simple string responses
-        return json.dumps({'text': result, 'draw': []})
+        # Fallback for simple string responses (e.g. errors or rate limits)
+        return json.dumps({'text': str(result), 'draw': []})
 
     def ai_generate_start(self, name, description):
         """Generate starting shapes for a project."""
@@ -782,14 +935,16 @@ class Api:
             return json.dumps({'success': True, 'shapes_count': len(shapes)})
         return json.dumps({'success': False, 'error': 'AI Generation failed or rate limited.'})
 
-    def update_ai_config(self, api_key, persist=False):
+    def update_ai_config(self, api_key, provider='gemini', persist=False):
         """Update the AI assistant's API key and optionally persist it."""
-        self.ai.set_api_key(api_key, persist)
+        self.ai.set_api_key(api_key, persist=persist, provider=provider)
         return json.dumps({'success': True})
 
     def get_ai_config(self):
-        """Retrieve the current AI configuration (masked key)."""
+        """Retrieve the current AI configurations (masked keys)."""
         return json.dumps({
-            'api_key': self.ai.get_api_key(),
-            'has_key': bool(self.ai.api_key)
+            'gemini_key': self.ai.get_api_key(provider='gemini'),
+            'openrouter_key': self.ai.get_api_key(provider='openrouter'),
+            'has_gemini': bool(self.ai.gemini_key),
+            'has_openrouter': bool(self.ai.openrouter_key)
         })

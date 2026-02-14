@@ -413,8 +413,178 @@ def rotate_point(point, center, angle_deg):
         center[1] + dx * sin_a + dy * cos_a
     ]
 
+def scale_point(point, base_point, factor):
+    """Scale a point [x, y] relative to a base point."""
+    return [
+        base_point[0] + (point[0] - base_point[0]) * factor,
+        base_point[1] + (point[1] - base_point[1]) * factor
+    ]
 
-def perpendicular_point(point, p1, p2):
+def scale_shape(shape, base_point, factor):
+    """
+    Apply scaling to a shape dictionary.
+    Modifies shape in-place and returns it.
+    """
+    stype = shape.get('type')
+    
+    if stype == 'line':
+        p1 = scale_point([shape['x1'], shape['y1']], base_point, factor)
+        p2 = scale_point([shape['x2'], shape['y2']], base_point, factor)
+        shape.update({'x1': p1[0], 'y1': p1[1], 'x2': p2[0], 'y2': p2[1]})
+        
+    elif stype == 'circle':
+        cp = scale_point([shape['cx'], shape['cy']], base_point, factor)
+        shape.update({
+            'cx': cp[0], 'cy': cp[1],
+            'radius': shape['radius'] * abs(factor)
+        })
+        
+    elif stype == 'arc':
+        cp = scale_point([shape['cx'], shape['cy']], base_point, factor)
+        shape.update({
+            'cx': cp[0], 'cy': cp[1],
+            'radius': shape['radius'] * abs(factor)
+        })
+        # Angles remain same for uniform scale
+        
+    elif stype == 'rectangle':
+        p1 = [shape['x'], shape['y']]
+        p2 = [shape['x'] + shape['width'], shape['y'] + shape['height']]
+        sp1 = scale_point(p1, base_point, factor)
+        sp2 = scale_point(p2, base_point, factor)
+        shape.update({
+            'x': min(sp1[0], sp2[0]),
+            'y': min(sp1[1], sp2[1]),
+            'width': abs(sp2[0] - sp1[0]),
+            'height': abs(sp2[1] - sp1[1])
+        })
+        
+    elif stype == 'polyline':
+        shape['points'] = [scale_point(pt, base_point, factor) for pt in shape['points']]
+        
+    elif stype == 'ellipse':
+        cp = scale_point([shape['cx'], shape['cy']], base_point, factor)
+        shape.update({
+            'cx': cp[0], 'cy': cp[1],
+            'rx': shape['rx'] * abs(factor),
+            'ry': shape['ry'] * abs(factor)
+        })
+
+    elif stype == 'text':
+        cp = scale_point([shape['x'], shape['y']], base_point, factor)
+        shape.update({
+            'x': cp[0], 'y': cp[1],
+            'fontSize': shape.get('fontSize', 14) * abs(factor)
+        })
+        
+    elif stype == 'block_reference':
+        cp = scale_point([shape['x'], shape['y']], base_point, factor)
+        shape.update({
+            'x': cp[0],
+            'y': cp[1],
+            'scale': shape.get('scale', 1.0) * abs(factor)
+        })
+        
+def translate_shape(shape, dx, dy):
+    """Move a shape by delta dx, dy."""
+    stype = shape.get('type')
+    
+    if stype == 'line':
+        shape['x1'] += dx; shape['y1'] += dy
+        shape['x2'] += dx; shape['y2'] += dy
+    elif stype in ['circle', 'arc', 'ellipse']:
+        shape['cx'] += dx; shape['cy'] += dy
+    elif stype == 'rectangle':
+        shape['x'] += dx; shape['y'] += dy
+    elif stype == 'polyline':
+        shape['points'] = [[p[0] + dx, p[1] + dy] for p in shape['points']]
+    elif stype == 'text':
+        shape['x'] += dx; shape['y'] += dy
+    elif stype == 'block_reference':
+        shape['x'] += dx; shape['y'] += dy
+        
+    return shape
+
+
+def rotate_shape(shape, base_point, angle_deg):
+    """Rotate a shape around a base point by angle_deg."""
+    stype = shape.get('type')
+    
+    if stype == 'line':
+        p1 = rotate_point([shape['x1'], shape['y1']], base_point, angle_deg)
+        p2 = rotate_point([shape['x2'], shape['y2']], base_point, angle_deg)
+        shape.update({'x1': p1[0], 'y1': p1[1], 'x2': p2[0], 'y2': p2[1]})
+        
+    elif stype == 'circle':
+        cp = rotate_point([shape['cx'], shape['cy']], base_point, angle_deg)
+        shape.update({'cx': cp[0], 'cy': cp[1]})
+        
+    elif stype == 'arc':
+        cp = rotate_point([shape['cx'], shape['cy']], base_point, angle_deg)
+        shape.update({
+            'cx': cp[0], 'cy': cp[1],
+            'startAngle': (shape.get('startAngle', 0) + angle_deg) % 360,
+            'endAngle': (shape.get('endAngle', 0) + angle_deg) % 360
+        })
+        
+    elif stype == 'rectangle':
+        # Rotate all 4 corners and convert to polyline (lossy for rect storage, but CAD standard)
+        x, y, w, h = shape['x'], shape['y'], shape['width'], shape['height']
+        p1 = rotate_point([x, y], base_point, angle_deg)
+        p2 = rotate_point([x + w, y], base_point, angle_deg)
+        p3 = rotate_point([x + w, y + h], base_point, angle_deg)
+        p4 = rotate_point([x, y + h], base_point, angle_deg)
+        
+        # Check if it's still axis-aligned at 0, 90, 180, 270
+        if angle_deg % 90 == 0:
+            shape.update({
+                'x': min(p1[0], p2[0], p3[0], p4[0]),
+                'y': min(p1[1], p2[1], p3[1], p4[1]),
+                'width': abs(p1[0] - p3[0]) if angle_deg % 180 != 0 else w,
+                'height': abs(p1[1] - p3[1]) if angle_deg % 180 != 0 else h
+            })
+            if angle_deg % 180 != 0:
+                shape['width'], shape['height'] = h, w
+        else:
+            # Convert to polyline
+            shape.update({
+                'type': 'polyline',
+                'points': [p1, p2, p3, p4],
+                'closed': True
+            })
+            if 'x' in shape: shape.pop('x')
+            if 'y' in shape: shape.pop('y')
+            if 'width' in shape: shape.pop('width')
+            if 'height' in shape: shape.pop('height')
+
+    elif stype == 'polyline':
+        shape['points'] = [rotate_point(pt, base_point, angle_deg) for pt in shape['points']]
+        
+    elif stype == 'ellipse':
+        cp = rotate_point([shape['cx'], shape['cy']], base_point, angle_deg)
+        shape.update({
+            'cx': cp[0], 'cy': cp[1],
+            'startAngle': (shape.get('startAngle', 0) + angle_deg) % 360,
+            'endAngle': (shape.get('endAngle', 0) + angle_deg) % 360
+            # Note: rx/ry stay same for axis-aligned rotation? 
+            # Real ellipses would need a rotation property. IndCAD's ellipse is simpler.
+        })
+
+    elif stype == 'text':
+        cp = rotate_point([shape['x'], shape['y']], base_point, angle_deg)
+        shape.update({
+            'x': cp[0], 'y': cp[1],
+            'rotation': (shape.get('rotation', 0) + angle_deg) % 360
+        })
+        
+    elif stype == 'block_reference':
+        cp = rotate_point([shape['x'], shape['y']], base_point, angle_deg)
+        shape.update({
+            'x': cp[0], 'y': cp[1],
+            'rotation': (shape.get('rotation', 0) + angle_deg) % 360
+        })
+        
+    return shape
     """Find the perpendicular foot from point to line through p1-p2 (extended)."""
     dx = p2[0] - p1[0]
     dy = p2[1] - p1[1]

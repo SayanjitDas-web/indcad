@@ -102,6 +102,95 @@ class DeleteLayerCommand(Command):
         project['shapes'].extend(self.orphaned_shapes)
 
 
+class ScaleShapesCommand(Command):
+    def __init__(self, shape_ids, base_point, factor):
+        self.shape_ids = shape_ids
+        self.base_point = base_point
+        self.factor = factor
+        self.old_shapes = {} # ID -> full shape data before scale
+
+    def execute(self, project):
+        from geometry_engine import scale_shape
+        for i, s in enumerate(project['shapes']):
+            if s['id'] in self.shape_ids:
+                if s['id'] not in self.old_shapes:
+                    self.old_shapes[s['id']] = copy.deepcopy(s)
+                scale_shape(project['shapes'][i], self.base_point, self.factor)
+
+    def undo(self, project):
+        for i, s in enumerate(project['shapes']):
+            if s['id'] in self.old_shapes:
+                project['shapes'][i] = copy.deepcopy(self.old_shapes[s['id']])
+
+
+class TranslateShapesCommand(Command):
+    def __init__(self, shape_ids, dx, dy):
+        self.shape_ids = shape_ids
+        self.dx = dx
+        self.dy = dy
+        self.old_shapes = {}
+
+    def execute(self, project):
+        from geometry_engine import translate_shape
+        for i, s in enumerate(project['shapes']):
+            if s['id'] in self.shape_ids:
+                if s['id'] not in self.old_shapes:
+                    self.old_shapes[s['id']] = copy.deepcopy(s)
+                translate_shape(project['shapes'][i], self.dx, self.dy)
+
+    def undo(self, project):
+        for i, s in enumerate(project['shapes']):
+            if s['id'] in self.old_shapes:
+                project['shapes'][i] = copy.deepcopy(self.old_shapes[s['id']])
+
+
+class RotateShapesCommand(Command):
+    def __init__(self, shape_ids, base_point, angle_deg):
+        self.shape_ids = shape_ids
+        self.base_point = base_point
+        self.angle_deg = angle_deg
+        self.old_shapes = {}
+
+    def execute(self, project):
+        from geometry_engine import rotate_shape
+        for i, s in enumerate(project['shapes']):
+            if s['id'] in self.shape_ids:
+                if s['id'] not in self.old_shapes:
+                    self.old_shapes[s['id']] = copy.deepcopy(s)
+                rotate_shape(project['shapes'][i], self.base_point, self.angle_deg)
+
+    def undo(self, project):
+        for i, s in enumerate(project['shapes']):
+            if s['id'] in self.old_shapes:
+                project['shapes'][i] = copy.deepcopy(self.old_shapes[s['id']])
+
+
+class AddBlockDefinitionCommand(Command):
+    def __init__(self, name, shapes):
+        self.name = name
+        self.shapes = shapes
+
+    def execute(self, project):
+        if 'blocks' not in project:
+            project['blocks'] = {}
+        project['blocks'][self.name] = self.shapes
+
+    def undo(self, project):
+        if self.name in project.get('blocks', {}):
+            del project['blocks'][self.name]
+
+
+class InsertBlockCommand(Command):
+    def __init__(self, block_ref):
+        self.block_ref = block_ref
+
+    def execute(self, project):
+        project['shapes'].append(self.block_ref)
+
+    def undo(self, project):
+        project['shapes'] = [s for s in project['shapes'] if s['id'] != self.block_ref['id']]
+
+
 class BatchCommand(Command):
     """Multiple commands as one undo/redo step."""
     def __init__(self, commands):
@@ -128,6 +217,13 @@ class ProjectManager:
         self.file_path = None
         self.dirty = False
 
+    def update_settings(self, settings):
+        """Update project settings."""
+        if 'settings' not in self.project:
+            self.project['settings'] = {}
+        self.project['settings'].update(settings)
+        self.dirty = True
+
     def _new_project(self):
         return {
             'name': 'Untitled',
@@ -147,8 +243,14 @@ class ProjectManager:
                 'gridVisible': True,
                 'snapEnabled': True,
                 'snapModes': ['endpoint', 'midpoint', 'center', 'grid'],
-                'backgroundColor': '#1a1a2e'
-            }
+                'backgroundColor': '#1a1a2e',
+                'unitType': 'decimal',     # decimal, architectural, engineering, fractional, scientific
+                'unitPrecision': 2,
+                'angleType': 'decimalDegrees', # decimalDegrees, degMinSec, grads, radians, surveyor
+                'anglePrecision': 0,
+                'units': 'millimeters'     # drawing units
+            },
+            'blocks': {}
         }
 
     def new_project(self):
@@ -194,6 +296,21 @@ class ProjectManager:
         self.execute_command(cmd)
         return shape_data['id']
 
+    def scale_shapes(self, ids, base_point, factor):
+        """Scale multiple shapes."""
+        command = ScaleShapesCommand(ids, base_point, factor)
+        return self.execute_command(command)
+
+    def translate_shapes(self, ids, dx, dy):
+        """Move multiple shapes."""
+        command = TranslateShapesCommand(ids, dx, dy)
+        return self.execute_command(command)
+
+    def rotate_shapes(self, ids, base_point, angle_deg):
+        """Rotate multiple shapes."""
+        command = RotateShapesCommand(ids, base_point, angle_deg)
+        return self.execute_command(command)
+
     def delete_shape(self, shape_id):
         cmd = DeleteShapeCommand(shape_id)
         self.execute_command(cmd)
@@ -216,6 +333,86 @@ class ProjectManager:
         cmd = AddLayerCommand(layer_data)
         self.execute_command(cmd)
         return layer_id
+
+    # ──────────────────────── Block Operations ────────────────────────
+
+    def create_block(self, name, base_point, shape_ids):
+        """Create a block definition from existing shapes and remove them from canvas."""
+        if not name or name in self.project.get('blocks', {}):
+            return False
+            
+        block_shapes = []
+        commands = []
+        
+        for sid in shape_ids:
+            shape = self.get_shape_by_id(sid)
+            if shape:
+                # Transform shape to be relative to base_point
+                from geometry_engine import scale_shape, scale_point
+                # Here we logic: offset everything so base_point is 0,0
+                rel_shape = copy.deepcopy(shape)
+                # We reuse scale_shape with factor 1 but use it to apply transformation?
+                # Better: implement a translate_shape in geometry_engine. 
+                # For now, let's just manually offset
+                self._offset_shape(rel_shape, -base_point[0], -base_point[1])
+                block_shapes.append(rel_shape)
+                commands.append(DeleteShapeCommand(sid))
+                
+        if not block_shapes:
+            return False
+            
+        commands.append(AddBlockDefinitionCommand(name, block_shapes))
+        
+        # Also insert one instance at the same location if desired? 
+        # Usually block creation in AutoCAD replaces selected objects with a block reference.
+        ref_id = str(uuid.uuid4())
+        ref = {
+            'id': ref_id,
+            'type': 'block_reference',
+            'blockName': name,
+            'x': base_point[0],
+            'y': base_point[1],
+            'scale': 1.0,
+            'rotation': 0.0,
+            'layer': self.project.get('activeLayer', 'layer-0')
+        }
+        commands.append(InsertBlockCommand(ref))
+        
+        self.execute_command(BatchCommand(commands))
+        return True
+
+    def insert_block(self, name, x, y, scale=1.0, rotation=0.0):
+        """Insert a block reference."""
+        if name not in self.project.get('blocks', {}):
+            return False
+            
+        ref = {
+            'id': str(uuid.uuid4()),
+            'type': 'block_reference',
+            'blockName': name,
+            'x': x,
+            'y': y,
+            'scale': scale,
+            'rotation': rotation,
+            'layer': self.project.get('activeLayer', 'layer-0')
+        }
+        self.execute_command(InsertBlockCommand(ref))
+        return True
+
+    def _offset_shape(self, shape, dx, dy):
+        """Helper to move a shape definition."""
+        stype = shape['type']
+        if stype == 'line':
+            shape['x1'] += dx; shape['y1'] += dy
+            shape['x2'] += dx; shape['y2'] += dy
+        elif stype in ['circle', 'arc', 'ellipse']:
+            shape['cx'] += dx; shape['cy'] += dy
+        elif stype in ['rectangle', 'text']:
+            shape['x'] += dx; shape['y'] += dy
+        elif stype == 'polyline':
+            shape['points'] = [[p[0] + dx, p[1] + dy] for p in shape['points']]
+        elif stype == 'block_reference':
+            shape['x'] += dx; shape['y'] += dy
 
     def delete_layer(self, layer_id):
         if len(self.project['layers']) <= 1:
@@ -260,7 +457,8 @@ class ProjectManager:
             'lineWidth': 'w', 'lineStyle': 's', 'points': 'p',
             'width': 'wid', 'height': 'hgt', 'fontSize': 'fs',
             'cx': 'cx', 'cy': 'cy', 'radius': 'r', 
-            'rx': 'rx', 'ry': 'ry', 'startAngle': 'sa', 'endAngle': 'ea'
+            'rx': 'rx', 'ry': 'ry', 'startAngle': 'sa', 'endAngle': 'ea',
+            'blockName': 'bn', 'rotation': 'rot', 'scale': 'sc'
         }
         
         compact = {}
@@ -287,7 +485,8 @@ class ProjectManager:
             't': 'type', 'l': 'layer', 'c': 'color', 
             'w': 'lineWidth', 's': 'lineStyle', 'p': 'points',
             'wid': 'width', 'hgt': 'height', 'fs': 'fontSize',
-            'r': 'radius', 'sa': 'startAngle', 'ea': 'endAngle'
+            'r': 'radius', 'sa': 'startAngle', 'ea': 'endAngle',
+            'bn': 'blockName', 'rot': 'rotation', 'sc': 'scale'
         }
         
         shape = {}
@@ -302,22 +501,31 @@ class ProjectManager:
             
         return shape
 
-    def load_from_json(self, json_str):
-        data = json.loads(json_str)
-        # Expand shapes if they appear compacted (checking for 't' key)
+    def load_project(self, data):
+        """Load project from a dictionary, expanding shapes if needed."""
         if 'shapes' in data:
             data['shapes'] = [self._expand_shape(s) if 't' in s else s for s in data['shapes']]
+        if 'blocks' in data:
+            for name, shapes in data['blocks'].items():
+                data['blocks'][name] = [self._expand_shape(s) if 't' in s else s for s in shapes]
         self.project = data
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.dirty = False
         return self.project
 
+    def load_from_json(self, json_str):
+        data = json.loads(json_str)
+        return self.load_project(data)
+
     def save_to_json(self):
         self.dirty = False
         # Create a deep copy for compaction to avoid mutating active project
         export_project = copy.deepcopy(self.project)
         export_project['shapes'] = [self._compact_shape(s) for s in export_project['shapes']]
+        if 'blocks' in export_project:
+            for name, shapes in export_project['blocks'].items():
+                export_project['blocks'][name] = [self._compact_shape(s) for s in shapes]
         # Use separators for maximum compactness (remove spaces)
         return json.dumps(export_project, separators=(',', ':'))
 

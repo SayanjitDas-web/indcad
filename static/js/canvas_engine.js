@@ -24,6 +24,7 @@ class CanvasEngine {
         this.preview = null;      // { type, ...data } for rubber-band
         this.snapPoint = null;    // currently active snap point
         this.measureLine = null;  // for measure tool display
+        this.blockDefinitions = {}; // { name: [shapes...] }
 
         // Interaction
         this._isPanning = false;
@@ -261,6 +262,15 @@ class CanvasEngine {
             }
             case 'dimension': {
                 return this._pointToLineDist(pos, shape.x1, shape.y1, shape.x2, shape.y2) < tol * 2;
+            }
+            case 'block_reference': {
+                const block = this.blockDefinitions[shape.blockName];
+                if (!block) return false;
+                for (const s of block) {
+                    const transformed = this._getTransformedShape(s, shape);
+                    if (this._hitTestShape(transformed, pos, tol)) return true;
+                }
+                return false;
             }
         }
         return false;
@@ -621,6 +631,21 @@ class CanvasEngine {
                     if (!isFinite(x + y + fs)) return null;
                     return { x: x, y: y - fs, w: (shape.content || '').length * fs * 0.6, h: fs };
                 }
+                case 'block_reference': {
+                    const block = this.blockDefinitions[shape.blockName];
+                    if (!block || block.length === 0) return null;
+                    let mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity;
+                    block.forEach(s => {
+                        const ts = this._getTransformedShape(s, shape);
+                        const bb = this._getBoundingBox(ts);
+                        if (bb) {
+                            mnx = Math.min(mnx, bb.x); mny = Math.min(mny, bb.y);
+                            mxx = Math.max(mxx, bb.x + bb.w); mxy = Math.max(mxy, bb.y + bb.h);
+                        }
+                    });
+                    if (!isFinite(mnx)) return null;
+                    return { x: mnx, y: mny, w: mxx - mnx, h: mxy - mny };
+                }
             }
         } catch (e) {
             console.error("Bounds error:", e, shape);
@@ -787,6 +812,7 @@ class CanvasEngine {
             case 'polyline': this._drawPolyline(shape); break;
             case 'text': this._drawText(shape, color); break;
             case 'dimension': this._drawDimension(shape); break;
+            case 'block_reference': this._drawBlockReference(shape); break;
         }
 
         ctx.setLineDash([]);
@@ -795,6 +821,263 @@ class CanvasEngine {
         if (isSelected) {
             this._drawSelectionHandles(shape);
         }
+    }
+
+    _getTransformedShape(s, ref) {
+        const shape = JSON.parse(JSON.stringify(s));
+        const angle = (ref.rotation || 0) * Math.PI / 180;
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        const scale = ref.scale || 1.0;
+        const transformX = (x, y) => ref.x + (x * cos - y * sin) * scale;
+        const transformY = (x, y) => ref.y + (x * sin + y * cos) * scale;
+
+        switch (shape.type) {
+            case 'line':
+                shape.x1 = transformX(s.x1, s.y1);
+                shape.y1 = transformY(s.x1, s.y1);
+                shape.x2 = transformX(s.x2, s.y2);
+                shape.y2 = transformY(s.x2, s.y2);
+                break;
+            case 'circle':
+            case 'arc':
+            case 'ellipse':
+                shape.cx = transformX(s.cx, s.cy);
+                shape.cy = transformY(s.cx, s.cy);
+                shape.radius = (s.radius || 0) * scale;
+                if (shape.type === 'ellipse') {
+                    shape.rx = (s.rx || 0) * scale;
+                    shape.ry = (s.ry || 0) * scale;
+                }
+                if (shape.type === 'arc' || shape.type === 'ellipse') {
+                    shape.startAngle = (s.startAngle || 0) + (ref.rotation || 0);
+                    shape.endAngle = (s.endAngle || 0) + (ref.rotation || 0);
+                }
+                break;
+            case 'rectangle':
+                const x = s.x, y = s.y, w = s.width, h = s.height;
+                shape.type = 'polyline';
+                shape.closed = true;
+                shape.points = [
+                    [transformX(x, y), transformY(x, y)],
+                    [transformX(x + w, y), transformY(x + w, y)],
+                    [transformX(x + w, y + h), transformY(x + w, y + h)],
+                    [transformX(x, y + h), transformY(x, y + h)]
+                ];
+                break;
+            case 'polyline':
+                shape.points = (s.points || []).map(p => [transformX(p[0], p[1]), transformY(p[0], p[1])]);
+                break;
+            case 'text':
+                shape.x = transformX(s.x, s.y);
+                shape.y = transformY(s.x, s.y);
+                shape.fontSize = (s.fontSize || 14) * scale;
+                break;
+            case 'block_reference':
+                shape.x = transformX(s.x, s.y);
+                shape.y = transformY(s.x, s.y);
+                shape.scale = (s.scale || 1.0) * scale;
+                shape.rotation = (s.rotation || 0) + (ref.rotation || 0);
+                break;
+        }
+        return shape;
+    }
+
+    _getScaledShape(s, basePoint, factor) {
+        const shape = JSON.parse(JSON.stringify(s));
+        const transformX = (x) => basePoint.x + (x - basePoint.x) * factor;
+        const transformY = (y) => basePoint.y + (y - basePoint.y) * factor;
+
+        switch (shape.type) {
+            case 'line':
+                shape.x1 = transformX(s.x1);
+                shape.y1 = transformY(s.y1);
+                shape.x2 = transformX(s.x2);
+                shape.y2 = transformY(s.y2);
+                break;
+            case 'circle':
+            case 'arc':
+            case 'ellipse':
+                shape.cx = transformX(s.cx);
+                shape.cy = transformY(s.cy);
+                shape.radius = (s.radius || 0) * Math.abs(factor);
+                if (shape.type === 'ellipse') {
+                    shape.rx = (s.rx || 0) * Math.abs(factor);
+                    shape.ry = (s.ry || 0) * Math.abs(factor);
+                }
+                break;
+            case 'rectangle': {
+                const x1 = transformX(s.x);
+                const y1 = transformY(s.y);
+                const x2 = transformX(s.x + s.width);
+                const y2 = transformY(s.y + s.height);
+                shape.x = Math.min(x1, x2);
+                shape.y = Math.min(y1, y2);
+                shape.width = Math.abs(x2 - x1);
+                shape.height = Math.abs(y2 - y1);
+                break;
+            }
+            case 'polyline':
+                shape.points = (s.points || []).map(p => [transformX(p[0]), transformY(p[1])]);
+                break;
+            case 'text':
+                shape.x = transformX(s.x);
+                shape.y = transformY(s.y);
+                shape.fontSize = (s.fontSize || 14) * Math.abs(factor);
+                break;
+            case 'block_reference':
+                shape.x = transformX(s.x);
+                shape.y = transformY(s.y);
+                shape.scale = (s.scale || 1.0) * Math.abs(factor);
+                break;
+        }
+        return shape;
+    }
+
+    _getTranslatedShape(s, dx, dy) {
+        const shape = JSON.parse(JSON.stringify(s));
+        const transformX = (x) => x + dx;
+        const transformY = (y) => y + dy;
+
+        switch (shape.type) {
+            case 'line':
+                shape.x1 = transformX(s.x1);
+                shape.y1 = transformY(s.y1);
+                shape.x2 = transformX(s.x2);
+                shape.y2 = transformY(s.x2, s.y2); // Fixed from view_file logic if s.y2 was missing
+                shape.x2 = transformX(s.x2);
+                shape.y2 = transformY(s.y2);
+                break;
+            case 'circle':
+            case 'arc':
+            case 'ellipse':
+                shape.cx = transformX(s.cx);
+                shape.cy = transformY(s.cy);
+                break;
+            case 'rectangle':
+                shape.x = transformX(s.x);
+                shape.y = transformY(s.y);
+                break;
+            case 'polyline':
+                shape.points = (s.points || []).map(p => [transformX(p[0]), transformY(p[1])]);
+                break;
+            case 'text':
+                shape.x = transformX(s.x);
+                shape.y = transformY(s.y);
+                break;
+            case 'block_reference':
+                shape.x = transformX(s.x);
+                shape.y = transformY(s.y);
+                break;
+        }
+        return shape;
+    }
+
+    _getRotatedShape(s, basePoint, angleDeg) {
+        const shape = JSON.parse(JSON.stringify(s));
+        const angleRad = angleDeg * Math.PI / 180;
+        const cos = Math.cos(angleRad);
+        const sin = Math.sin(angleRad);
+
+        const transformX = (x, y) => {
+            const dx = x - basePoint.x;
+            const dy = y - basePoint.y;
+            return basePoint.x + dx * cos - dy * sin;
+        };
+        const transformY = (x, y) => {
+            const dx = x - basePoint.x;
+            const dy = y - basePoint.y;
+            return basePoint.y + dx * sin + dy * cos;
+        };
+
+        switch (shape.type) {
+            case 'line':
+                shape.x1 = transformX(s.x1, s.y1);
+                shape.y1 = transformY(s.x1, s.y1);
+                shape.x2 = transformX(s.x2, s.y2);
+                shape.y2 = transformY(s.x2, s.y2);
+                break;
+            case 'circle':
+                shape.cx = transformX(s.cx, s.cy);
+                shape.cy = transformY(s.cx, s.cy);
+                break;
+            case 'arc':
+                shape.cx = transformX(s.cx, s.cy);
+                shape.cy = transformY(s.cx, s.cy);
+                shape.startAngle = (s.startAngle || 0) + angleDeg;
+                shape.endAngle = (s.endAngle || 0) + angleDeg;
+                break;
+            case 'rectangle': {
+                // Convert to polyline for preview
+                const x = s.x, y = s.y, w = s.width, h = s.height;
+                shape.type = 'polyline';
+                shape.closed = true;
+                shape.points = [
+                    [transformX(x, y), transformY(x, y)],
+                    [transformX(x + w, y), transformY(x + w, y)],
+                    [transformX(x + w, y + h), transformY(x + w, y + h)],
+                    [transformX(x, y + h), transformY(x, y + h)]
+                ];
+                break;
+            }
+            case 'polyline':
+                shape.points = (s.points || []).map(p => [transformX(p[0], p[1]), transformY(p[0], p[1])]);
+                break;
+            case 'ellipse':
+                shape.cx = transformX(s.cx, s.cy);
+                shape.cy = transformY(s.cx, s.cy);
+                shape.startAngle = (s.startAngle || 0) + angleDeg;
+                shape.endAngle = (s.endAngle || 0) + angleDeg;
+                break;
+            case 'text':
+                shape.x = transformX(s.x, s.y);
+                shape.y = transformY(s.x, s.y);
+                shape.rotation = (s.rotation || 0) + angleDeg;
+                break;
+            case 'block_reference':
+                shape.x = transformX(s.x, s.y);
+                shape.y = transformY(s.x, s.y);
+                shape.rotation = (s.rotation || 0) + angleDeg;
+                break;
+        }
+        return shape;
+    }
+
+    _drawBlockReference(ref) {
+        const block = this.blockDefinitions[ref.blockName];
+        if (!block) return;
+
+        const isSelected = this.selectedIds.has(ref.id);
+        const isHovered = this.hoveredId === ref.id;
+
+        block.forEach(s => {
+            const transformed = this._getTransformedShape(s, ref);
+            const style = { ...transformed };
+            if (isSelected) style.id = ref.id;
+            if (isHovered && !isSelected) style.id = ref.id;
+            this._renderShape(style);
+        });
+    }
+
+    _renderShapeInBlock(shape) {
+        const ctx = this.ctx;
+        // Blocks use their defined colors or follow layer color if implemented
+        // For now, use defined colors
+        ctx.strokeStyle = shape.color || '#ffffff';
+        ctx.lineWidth = shape.lineWidth || 1;
+
+        // We need to temporarily set the transform back TO WORLD for drawing 
+        // IF our drawing methods use world-to-screen internal logic.
+        // BUT wait, _renderShape uses _drawLine which... let's check.
+        // _drawLine(s) likely does its own projecting. 
+        // If so, we need to handle nested projections carefully.
+
+        // Actually, my _drawLine etc. usually work in WORLD coordinates and I rely on Canvas transform?
+        // Let's check _drawLine.
+    }
+
+    setBlocks(blocks) {
+        this.blockDefinitions = blocks || {};
     }
 
     _drawLine(s) {
@@ -915,7 +1198,7 @@ class CanvasEngine {
         ctx.fillStyle = this.colors.dimension;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'bottom';
-        ctx.fillText(dist.toFixed(2), mid.x, mid.y - 4);
+        ctx.fillText(Units.formatLinear(dist), mid.x, mid.y - 4);
         ctx.textAlign = 'left';
     }
 
@@ -977,65 +1260,82 @@ class CanvasEngine {
 
     _renderPreview() {
         const ctx = this.ctx;
-        ctx.strokeStyle = this.colors.preview;
+        ctx.strokeStyle = '#ffff00'; // Default preview color
         ctx.lineWidth = 1;
-        ctx.setLineDash([6, 4]);
+        ctx.setLineDash([5, 5]);
 
-        const p = this.preview;
-        switch (p.type) {
-            case 'line': {
-                const a = this.worldToScreen(p.x1, p.y1);
-                const b = this.worldToScreen(p.x2, p.y2);
-                ctx.beginPath();
-                ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
-                ctx.stroke();
-                break;
-            }
-            case 'rectangle': {
-                const a = this.worldToScreen(p.x, p.y);
-                const b = this.worldToScreen(p.x + p.width, p.y + p.height);
-                ctx.beginPath();
-                ctx.rect(a.x, a.y, b.x - a.x, b.y - a.y);
-                ctx.stroke();
-                break;
-            }
-            case 'circle': {
-                const c = this.worldToScreen(p.cx, p.cy);
-                ctx.beginPath();
-                ctx.arc(c.x, c.y, p.radius * this.zoom, 0, Math.PI * 2);
-                ctx.stroke();
-                break;
-            }
-            case 'arc': {
-                const c = this.worldToScreen(p.cx, p.cy);
-                ctx.beginPath();
-                ctx.arc(c.x, c.y, p.radius * this.zoom,
-                    (p.startAngle || 0) * Math.PI / 180,
-                    (p.endAngle || 360) * Math.PI / 180);
-                ctx.stroke();
-                break;
-            }
-            case 'ellipse': {
-                const c = this.worldToScreen(p.cx, p.cy);
-                ctx.beginPath();
-                ctx.ellipse(c.x, c.y, p.rx * this.zoom, p.ry * this.zoom, 0, 0, Math.PI * 2);
-                ctx.stroke();
-                break;
-            }
-            case 'polyline': {
-                const pts = p.points || [];
-                if (pts.length < 1) break;
-                ctx.beginPath();
-                const first = this.worldToScreen(pts[0][0], pts[0][1]);
-                ctx.moveTo(first.x, first.y);
-                for (let i = 1; i < pts.length; i++) {
-                    const pt = this.worldToScreen(pts[i][0], pts[i][1]);
-                    ctx.lineTo(pt.x, pt.y);
+        const previews = Array.isArray(this.preview) ? this.preview : [this.preview];
+
+        previews.forEach(p => {
+            if (!p) return;
+
+            // Respect individual preview color if set
+            if (p.color) ctx.strokeStyle = p.color;
+            if (p.lineStyle === 'dashed') ctx.setLineDash([5, 5]);
+            else if (p.lineStyle === 'solid') ctx.setLineDash([]);
+
+            this.ctx.save();
+            switch (p.type) {
+                case 'line': {
+                    const a = this.worldToScreen(p.x1, p.y1);
+                    const b = this.worldToScreen(p.x2, p.y2);
+                    ctx.beginPath();
+                    ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+                    ctx.stroke();
+                    break;
                 }
-                ctx.stroke();
-                break;
+                case 'rectangle': {
+                    const a = this.worldToScreen(p.x, p.y);
+                    const b = this.worldToScreen(p.x + p.width, p.y + p.height);
+                    ctx.beginPath();
+                    ctx.rect(a.x, a.y, b.x - a.x, b.y - a.y);
+                    ctx.stroke();
+                    break;
+                }
+                case 'circle': {
+                    const c = this.worldToScreen(p.cx, p.cy);
+                    ctx.beginPath();
+                    ctx.arc(c.x, c.y, p.radius * this.zoom, 0, Math.PI * 2);
+                    ctx.stroke();
+                    break;
+                }
+                case 'arc': {
+                    const c = this.worldToScreen(p.cx, p.cy);
+                    ctx.beginPath();
+                    ctx.arc(c.x, c.y, p.radius * this.zoom,
+                        (p.startAngle || 0) * Math.PI / 180,
+                        (p.endAngle || 360) * Math.PI / 180);
+                    ctx.stroke();
+                    break;
+                }
+                case 'ellipse': {
+                    const c = this.worldToScreen(p.cx, p.cy);
+                    ctx.beginPath();
+                    ctx.ellipse(c.x, c.y, p.rx * this.zoom, p.ry * this.zoom, 0, 0, Math.PI * 2);
+                    ctx.stroke();
+                    break;
+                }
+                case 'polyline': {
+                    const pts = p.points || [];
+                    if (pts.length < 1) break;
+                    ctx.beginPath();
+                    const first = this.worldToScreen(pts[0][0], pts[0][1]);
+                    ctx.moveTo(first.x, first.y);
+                    for (let i = 1; i < pts.length; i++) {
+                        const pt = this.worldToScreen(pts[i][0], pts[i][1]);
+                        ctx.lineTo(pt.x, pt.y);
+                    }
+                    ctx.stroke();
+                    break;
+                }
+                case 'block_reference': {
+                    this._drawBlockReference(p);
+                    break;
+                }
             }
-        }
+            this.ctx.restore();
+        });
+
         ctx.setLineDash([]);
     }
 

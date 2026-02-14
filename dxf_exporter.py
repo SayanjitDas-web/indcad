@@ -19,40 +19,74 @@ class DXFExporter:
             self.doc = ezdxf.new('R2010')
             self.msp = self.doc.modelspace()
 
+            # 0. Set Units
+            settings = project_data.get('settings', {})
+            units_str = settings.get('units', 'millimeters').lower()
+            insunits = self._map_units(units_str)
+            self.doc.header['$INSUNITS'] = insunits
+
             # 1. Map Layers
             layers = project_data.get('layers', [])
+            self.layer_map = {} # ID -> Name
             for layer in layers:
-                name = layer.get('name', '0').replace(' ', '_')
+                name = layer.get('name', '0').strip().replace(' ', '_')
+                lid = layer.get('id', '0')
                 color_hex = layer.get('color', '#ffffff')
                 aci = self._hex_to_aci(color_hex)
                 
+                if not name: name = lid
+                self.layer_map[lid] = name
+
                 if name not in self.doc.layers:
                     self.doc.layers.new(name=name, dxfattribs={'color': aci})
 
-            # 2. Map Shapes
+            # 2. Map Blocks (Definitions)
+            blocks = project_data.get('blocks', {})
+            for name, block_shapes in blocks.items():
+                safe_name = name.replace(' ', '_')
+                if safe_name not in self.doc.blocks:
+                    dxf_block = self.doc.blocks.new(name=safe_name)
+                    # Blocks in IndCAD are relative to [0,0] typically,
+                    # but check if they have a base_point.
+                    # Currently IndCAD blocks are just lists of shapes.
+                    for s in block_shapes:
+                        self._add_shape_to_container(dxf_block, s)
+
+            # 3. Map Project Shapes
             shapes = project_data.get('shapes', [])
             for shape in shapes:
                 if shape.get('_hidden'):
                     continue
-                self._add_shape_to_dxf(shape)
+                self._add_shape_to_container(self.msp, shape)
 
-            # 3. Save
+            # 4. Save
             self.doc.saveas(output_path)
             return True
         except Exception as e:
+            import traceback
             print(f"DXF Export Error: {e}")
+            traceback.print_exc()
             return False
 
-    def _add_shape_to_dxf(self, shape):
-        """Map individual IndCAD shapes to DXF entities."""
+    def _map_units(self, units_str):
+        """Map IndCAD units string to DXF $INSUNITS values."""
+        mapping = {
+            'inches': 1,
+            'feet': 2,
+            'millimeters': 4,
+            'centimeters': 5,
+            'meters': 6,
+            'kilometers': 7,
+            'yards': 10,
+            'miles': 11
+        }
+        return mapping.get(units_str, 0) # 0 = Unspecified
+
+    def _add_shape_to_container(self, container, shape):
+        """Map individual IndCAD shapes to DXF entities in a container (MSP or Block)."""
         stype = shape.get('type')
-        layer_name = shape.get('layer_name', '0').replace(' ', '_') # Fallback to 0
-        
-        # Determine layer
-        # If the shape has a 'layer' ID, we should ideally look up the name, 
-        # but for now we'll assume the layer name is passed or use a default.
-        # In our system, shapes have 'layer' (ID).
-        dxf_layer = layer_name
+        lid = shape.get('layer', 'layer-0')
+        dxf_layer = self.layer_map.get(lid, '0')
         
         color_hex = shape.get('color', '#ffffff')
         aci = self._hex_to_aci(color_hex)
@@ -60,71 +94,91 @@ class DXFExporter:
 
         try:
             if stype == 'line':
-                self.msp.add_line((shape['x1'], shape['y1']), (shape['x2'], shape['y2']), dxfattribs=attribs)
+                container.add_line((shape['x1'], -shape['y1']), (shape['x2'], -shape['y2']), dxfattribs=attribs)
             
             elif stype == 'rectangle':
                 x, y = shape['x'], shape['y']
                 w, h = shape['width'], shape['height']
-                points = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
-                self.msp.add_lwpolyline(points, close=True, dxfattribs=attribs)
+                # Correctly orient rectangle points for Y-up
+                points = [(x, -y), (x + w, -y), (x + w, -(y + h)), (x, -(y + h))]
+                container.add_lwpolyline(points, close=True, dxfattribs=attribs)
             
             elif stype == 'polyline':
                 points = shape.get('points', [])
                 if points:
-                    self.msp.add_lwpolyline(points, close=shape.get('closed', False), dxfattribs=attribs)
+                    dxf_points = [(p[0], -p[1]) for p in points]
+                    container.add_lwpolyline(dxf_points, close=shape.get('closed', False), dxfattribs=attribs)
             
             elif stype == 'circle':
-                self.msp.add_circle((shape['cx'], shape['cy']), shape['radius'], dxfattribs=attribs)
+                container.add_circle((shape['cx'], -shape['cy']), shape['radius'], dxfattribs=attribs)
             
             elif stype == 'arc':
-                # ezdxf uses degrees for angles
-                self.msp.add_arc(
-                    (shape['cx'], shape['cy']), 
+                # Negate and swap angles for Y-flip
+                sa = -shape['endAngle']
+                ea = -shape['startAngle']
+                container.add_arc(
+                    (shape['cx'], -shape['cy']), 
                     shape['radius'], 
-                    shape['startAngle'], 
-                    shape['endAngle'], 
+                    sa, 
+                    ea, 
                     dxfattribs=attribs
                 )
             
             elif stype == 'ellipse':
-                # IndCAD ellipse is cx, cy, rx, ry. 
-                # DXF Ellipse uses center, major_axis (vector), and ratio.
-                # Assuming no rotation for now (major axis is rx along X)
                 rx, ry = shape['rx'], shape['ry']
                 ratio = ry / rx if rx != 0 else 1
-                self.msp.add_ellipse(
-                    (shape['cx'], shape['cy']), 
-                    major_axis=(rx, 0), 
+                rotation = -shape.get('rotation', 0)
+                # major axis vector
+                rad = math.radians(rotation)
+                major_axis = (rx * math.cos(rad), rx * math.sin(rad))
+                container.add_ellipse(
+                    (shape['cx'], -shape['cy']), 
+                    major_axis=major_axis, 
                     ratio=ratio, 
                     dxfattribs=attribs
                 )
             
             elif stype == 'text':
-                text = self.msp.add_text(
-                    shape.get('content', ''), 
+                content = shape.get('content', '')
+                t = container.add_text(
+                    content, 
                     dxfattribs={
-                        'insert': (shape['x'], shape['y']),
+                        'insert': (shape['x'], -shape['y']),
                         'height': shape.get('fontSize', 12),
                         'layer': dxf_layer,
-                        'color': aci
+                        'color': aci,
+                        'rotation': -shape.get('rotation', 0)
                     }
                 )
             
+            elif stype == 'block_reference':
+                block_name = shape.get('blockName', '').replace(' ', '_')
+                if block_name in self.doc.blocks:
+                    scale = shape.get('scale', 1.0)
+                    container.add_blockref(
+                        block_name, 
+                        insert=(shape['x'], -shape['y']),
+                        dxfattribs={
+                            'xscale': scale,
+                            'yscale': scale,
+                            'rotation': -shape.get('rotation', 0),
+                            'layer': dxf_layer,
+                            'color': aci
+                        }
+                    )
+            
             elif stype == 'dimension':
-                # Simplified: dimensions are complex in DXF, export as lines and text for stability
-                # Or use AlignedDimension if rx1/ry1/rx2/ry2 exist
                 x1, y1 = shape.get('x1', 0), shape.get('y1', 0)
                 x2, y2 = shape.get('x2', 0), shape.get('y2', 0)
-                # Aligned dimension
-                self.msp.add_aligned_dim(
-                    p1=(x1, y1),
-                    p2=(x2, y2),
-                    distance=20, # Offset from line
+                container.add_aligned_dim(
+                    p1=(x1, -y1),
+                    p2=(x2, -y2),
+                    distance=20,
                     dxfattribs=attribs
                 ).render()
 
-        except KeyError as e:
-            print(f"Skipping shape due to missing data: {e}")
+        except Exception as e:
+            print(f"Skipping shape {stype} due to error: {e}")
 
     def _hex_to_aci(self, hex_color):
         """

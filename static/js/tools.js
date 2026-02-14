@@ -20,7 +20,7 @@ class BaseTool {
     onMouseMove(world, screen, e) { }
     onMouseUp(world, screen, e) { }
     onDoubleClick(world, screen, e) { }
-    onKeyDown(key, e) { }
+    onKeyDown(key, e) { return false; }
 }
 
 // ═══════════════════════════════════════════════════
@@ -601,6 +601,495 @@ class CopyTool extends BaseTool {
 }
 
 // ═══════════════════════════════════════════════════
+// ScaleTool (AutoCAD Style)
+// ═══════════════════════════════════════════════════
+
+class ScaleTool extends BaseTool {
+    constructor(manager) {
+        super(manager);
+        this._state = 'pick_base'; // pick_base, pick_factor/ref_1, ref_2, ref_new
+        this._basePoint = null;
+        this._refPoint1 = null;
+        this._refPoint2 = null;
+        this._ids = [];
+        this._baseShapes = []; // Original shapes for preview
+        this._scaleFactor = 1.0;
+        this._mode = 'normal'; // normal, reference
+        this._isCopy = false;
+    }
+
+    activate() {
+        this._ids = [...this.engine.selectedIds];
+        if (this._ids.length === 0) {
+            alert('Select objects first!');
+            this.manager.setTool('select');
+            return;
+        }
+        // Cache base shapes for fast preview
+        this._baseShapes = this.engine.shapes.filter(s => this._ids.includes(s.id));
+        this._reset();
+        this.engine.canvas.style.cursor = 'crosshair';
+        document.getElementById('status-tool').textContent = '📏 Scale: Specify base point';
+    }
+
+    _reset() {
+        this._state = 'pick_base';
+        this._basePoint = null;
+        this._refPoint1 = null;
+        this._refPoint2 = null;
+        this._mode = 'normal';
+        this.engine.preview = null;
+    }
+
+    onMouseDown(world) {
+        const snapped = this.manager.applySnap(world);
+
+        if (this._state === 'pick_base') {
+            this._basePoint = snapped;
+            this._state = 'pick_factor';
+            document.getElementById('status-tool').textContent = '📏 Scale: Specify scale factor or [R] for Reference';
+        }
+        else if (this._state === 'pick_factor') {
+            // Interactive scale finish
+            this._finishScale(this._scaleFactor);
+        }
+        else if (this._state === 'ref_1') {
+            this._refPoint1 = snapped;
+            this._state = 'ref_2';
+            document.getElementById('status-tool').textContent = '📏 Scale: Specify second reference point';
+        }
+        else if (this._state === 'ref_2') {
+            this._refPoint2 = snapped;
+            this._state = 'ref_new';
+            document.getElementById('status-tool').textContent = '📏 Scale: Specify new length';
+        }
+        else if (this._state === 'ref_new') {
+            const refDist = this._dist(this._refPoint1, this._refPoint2);
+            const newDist = this._dist(this._basePoint, snapped);
+            if (refDist > 0) {
+                this._finishScale(newDist / refDist);
+            }
+        }
+    }
+
+    onMouseMove(world) {
+        const snapped = this.manager.applySnap(world);
+
+        if (this._state === 'pick_base') {
+            this.manager.applySnap(world); // visualization ONLY
+        }
+        else if (this._state === 'pick_factor' && this._mode === 'normal') {
+            const dLine = this._dist(this._basePoint, snapped);
+
+            // Power Scale Logic:
+            // Reference distance is relative to zoom. 100px on screen = 1.0 factor
+            const refDist = 100 / this.engine.zoom;
+            this._scaleFactor = dLine / refDist || 1.0;
+
+            if (this._scaleFactor < 0.001) this._scaleFactor = 0.001;
+
+            // Generate Preview
+            const previewShapes = this._baseShapes.map(s => {
+                const scaled = this.engine._getScaledShape(s, this._basePoint, this._scaleFactor);
+                scaled.color = this._isCopy ? '#00ff00' : '#ffff00';
+                scaled.lineStyle = 'dashed';
+                return scaled;
+            });
+
+            // Add rubber-band line
+            previewShapes.push({
+                type: 'line',
+                x1: this._basePoint.x, y1: this._basePoint.y,
+                x2: snapped.x, y2: snapped.y,
+                color: '#888', lineStyle: 'dashed'
+            });
+
+            this.engine.preview = previewShapes;
+
+            const copyHint = this._isCopy ? '[COPY MODE]' : '';
+            document.getElementById('status-tool').textContent =
+                `📏 Scale: factor ${this._scaleFactor.toFixed(3)} ${copyHint} [R: Ref] [C: Copy] [Enter: Input]`;
+            this.engine.render();
+        }
+        else if (this._state === 'ref_new') {
+            const refDist = this._dist(this._refPoint1, this._refPoint2);
+            const newDist = this._dist(this._basePoint, snapped);
+            const factor = refDist > 0 ? newDist / refDist : 1.0;
+
+            const previewShapes = this._baseShapes.map(s => {
+                const scaled = this.engine._getScaledShape(s, this._basePoint, factor);
+                scaled.color = '#ffff00';
+                scaled.lineStyle = 'dashed';
+                return scaled;
+            });
+
+            previewShapes.push({
+                type: 'line',
+                x1: this._basePoint.x, y1: this._basePoint.y,
+                x2: snapped.x, y2: snapped.y,
+                color: '#aaa', lineStyle: 'dashed'
+            });
+
+            this.engine.preview = previewShapes;
+            document.getElementById('status-tool').textContent = `📏 Scale: factor ${(factor).toFixed(3)} (Reference Mode)`;
+            this.engine.render();
+        }
+    }
+
+    onKeyDown(key, e) {
+        if (key === 'Escape') {
+            this.manager.setTool('select');
+            return true;
+        }
+        if (key.toLowerCase() === 'r' && this._state === 'pick_factor') {
+            this._mode = 'reference';
+            this._state = 'ref_1';
+            document.getElementById('status-tool').textContent = '📏 Scale: Specify reference length (point 1)';
+            return true;
+        }
+        if (key.toLowerCase() === 'c' && this._state === 'pick_factor') {
+            this._isCopy = !this._isCopy;
+            // Update status text immediately
+            this.onMouseMove(this.engine.screenToWorld(this.engine._lastMouse.x, this.engine._lastMouse.y));
+            return true;
+        }
+        if (key === 'Enter' && this._state === 'pick_factor') {
+            const factor = prompt('Enter scale factor:', this._scaleFactor.toFixed(3));
+            if (factor) this._finishScale(parseFloat(factor));
+            return true;
+        }
+        return false;
+    }
+
+    async _finishScale(factor) {
+        try {
+            if (this._isCopy) {
+                // For copy mode: first copy then scale the new ones
+                const result = await this.engine.api.copy_shapes(
+                    JSON.stringify(this._ids),
+                    0, 0
+                );
+                const data = JSON.parse(result);
+                if (data.success && data.ids) {
+                    await this.engine.api.scale_shapes(
+                        JSON.stringify(data.ids),
+                        JSON.stringify([this._basePoint.x, this._basePoint.y]),
+                        factor
+                    );
+                }
+            } else {
+                await this.engine.api.scale_shapes(
+                    JSON.stringify(this._ids),
+                    JSON.stringify([this._basePoint.x, this._basePoint.y]),
+                    factor
+                );
+            }
+            if (this.manager.onProjectUpdated) this.manager.onProjectUpdated();
+            this.engine.preview = null;
+            this.manager.setTool('select');
+        } catch (e) {
+            console.error('Scale failed:', e);
+        }
+    }
+
+    _dist(p1, p2) {
+        return Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
+    }
+}
+
+class TransformTool extends BaseTool {
+    constructor(manager) {
+        super(manager);
+        this._state = 'pick_base'; // pick_base, transforming
+        this._mode = 'move'; // move, rotate
+        this._isCopy = false;
+        this._basePoint = null;
+        this._ids = [];
+        this._baseShapes = [];
+
+        // Results
+        this._dx = 0;
+        this._dy = 0;
+        this._angle = 0;
+    }
+
+    activate() {
+        this._ids = [...this.engine.selectedIds];
+        if (this._ids.length === 0) {
+            alert('Select objects first!');
+            this.manager.setTool('select');
+            return;
+        }
+        this._baseShapes = this.engine.shapes.filter(s => this._ids.includes(s.id));
+        this._reset();
+        this.engine.canvas.style.cursor = 'crosshair';
+        document.getElementById('status-tool').textContent = '🔧 Transform: Specify base point';
+    }
+
+    _reset() {
+        this._state = 'pick_base';
+        this._mode = 'move';
+        this._isCopy = false;
+        this._basePoint = null;
+        this._dx = 0; this._dy = 0; this._angle = 0;
+        this.engine.preview = null;
+    }
+
+    onMouseDown(world) {
+        const snapped = this.manager.applySnap(world);
+
+        if (this._state === 'pick_base') {
+            this._basePoint = snapped;
+            this._state = 'transforming';
+            this._dx = 0; this._dy = 0; this._angle = 0;
+            this._updateStatus();
+        } else if (this._state === 'transforming') {
+            this._finish();
+        }
+    }
+
+    onMouseMove(world) {
+        const snapped = this.manager.applySnap(world);
+
+        if (this._state === 'transforming') {
+            if (this._mode === 'move') {
+                this._dx = snapped.x - this._basePoint.x;
+                this._dy = snapped.y - this._basePoint.y;
+
+                const previewShapes = this._baseShapes.map(s => {
+                    const moved = this.engine._getTranslatedShape(s, this._dx, this._dy);
+                    moved.color = this._isCopy ? '#00ff00' : '#ffff00';
+                    moved.lineStyle = 'dashed';
+                    return moved;
+                });
+
+                previewShapes.push({
+                    type: 'line', x1: this._basePoint.x, y1: this._basePoint.y,
+                    x2: snapped.x, y2: snapped.y, color: '#888', lineStyle: 'dashed'
+                });
+
+                this.engine.preview = previewShapes;
+            } else if (this._mode === 'rotate') {
+                const angle = Math.atan2(snapped.y - this._basePoint.y, snapped.x - this._basePoint.x);
+                this._angle = angle * 180 / Math.PI; // In degrees
+
+                const previewShapes = this._baseShapes.map(s => {
+                    const rotated = this.engine._getRotatedShape(s, this._basePoint, this._angle);
+                    rotated.color = this._isCopy ? '#00ff00' : '#ffff00';
+                    rotated.lineStyle = 'dashed';
+                    return rotated;
+                });
+
+                // Rotation visualization line
+                previewShapes.push({
+                    type: 'line', x1: this._basePoint.x, y1: this._basePoint.y,
+                    x2: snapped.x, y2: snapped.y, color: '#888', lineStyle: 'dashed'
+                });
+
+                this.engine.preview = previewShapes;
+            }
+            this._updateStatus();
+            this.engine.render();
+        }
+    }
+
+    onKeyDown(key, e) {
+        if (key === 'Escape') {
+            this.manager.setTool('select');
+            return true;
+        }
+
+        if (this._state === 'transforming') {
+            if (key.toLowerCase() === 'r') {
+                this._mode = (this._mode === 'move') ? 'rotate' : 'move';
+                this.onMouseMove(this.engine.screenToWorld(this.engine._lastMouse.x, this.engine._lastMouse.y));
+                return true;
+            }
+            if (key.toLowerCase() === 'c') {
+                this._isCopy = !this._isCopy;
+                this.onMouseMove(this.engine.screenToWorld(this.engine._lastMouse.x, this.engine._lastMouse.y));
+                return true;
+            }
+        }
+        return false;
+    }
+
+    _updateStatus() {
+        const copyHint = this._isCopy ? '[COPY]' : '';
+        if (this._mode === 'move') {
+            document.getElementById('status-tool').textContent =
+                `🔧 Move+: DX:${this._dx.toFixed(2)} DY:${this._dy.toFixed(2)} ${copyHint} [R:Rotate] [C:Copy] [Enter:Finish]`;
+        } else {
+            document.getElementById('status-tool').textContent =
+                `🔧 Move+: Angle:${this._angle.toFixed(1)}° ${copyHint} [R:Move] [C:Copy] [Enter:Finish]`;
+        }
+    }
+
+    async _finish() {
+        try {
+            let targetIds = this._ids;
+
+            if (this._isCopy) {
+                const result = await this.engine.api.copy_shapes(JSON.stringify(this._ids), 0, 0);
+                const data = JSON.parse(result);
+                if (data.success && data.ids) {
+                    targetIds = data.ids;
+                } else {
+                    throw new Error("Copy failed");
+                }
+            }
+
+            if (this._mode === 'move') {
+                await this.engine.api.translate_shapes(JSON.stringify(targetIds), this._dx, this._dy);
+            } else {
+                await this.engine.api.rotate_shapes(JSON.stringify(targetIds), JSON.stringify([this._basePoint.x, this._basePoint.y]), this._angle);
+            }
+
+            if (this.manager.onProjectUpdated) this.manager.onProjectUpdated();
+            this._reset();
+            this.manager.setTool('select');
+        } catch (e) {
+            console.error('Transform failed:', e);
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════
+// Block Tools
+// ═══════════════════════════════════════════════════
+
+class BlockCreateTool extends BaseTool {
+    constructor(manager) {
+        super(manager);
+        this.basePoint = null;
+    }
+
+    activate() {
+        this.basePoint = null;
+        if (this.engine.selectedIds.size === 0) {
+            alert('Select shapes to include in the block first!');
+            this.manager.setTool('select');
+            return;
+        }
+        this.engine.canvas.style.cursor = 'crosshair';
+        document.getElementById('status-tool').textContent = '📦 Create Block: Click base point';
+    }
+
+    onMouseDown(world) {
+        const snapped = this.manager.applySnap(world);
+        if (!this.basePoint) {
+            this.basePoint = snapped;
+            this._showNamePrompt();
+        }
+    }
+
+    async _showNamePrompt() {
+        const name = prompt('Enter Block Name:');
+        if (!name) {
+            this.manager.setTool('select');
+            return;
+        }
+
+        try {
+            const ids = Array.from(this.engine.selectedIds);
+            const res = await this.engine.api.create_block(
+                name,
+                JSON.stringify([this.basePoint.x, this.basePoint.y]),
+                JSON.stringify(ids)
+            );
+            const data = JSON.parse(res);
+            if (data.success) {
+                if (this.manager.onProjectUpdated) await this.manager.onProjectUpdated();
+                this.manager.setTool('select');
+            } else {
+                alert('Block creation failed. Name might already exist.');
+                this.manager.setTool('select');
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    onKeyDown(key) {
+        if (key === 'Escape') this.manager.setTool('select');
+    }
+}
+
+class BlockInsertTool extends BaseTool {
+    constructor(manager) {
+        super(manager);
+        this.blockName = null;
+    }
+
+    async activate() {
+        if (this.blockName) {
+            this.engine.canvas.style.cursor = 'crosshair';
+            document.getElementById('status-tool').textContent = `📦 Insert Block [${this.blockName}]: Click insertion point`;
+            return;
+        }
+
+        // Get available blocks
+        const res = await this.engine.api.get_blocks();
+        const data = JSON.parse(res);
+        const blocks = data.blocks || [];
+
+        if (blocks.length === 0) {
+            alert('No blocks defined in this project.');
+            this.manager.setTool('select');
+            return;
+        }
+
+        const name = prompt('Enter Block Name to Insert (' + blocks.join(', ') + '):', blocks[0]);
+        if (!name || !blocks.includes(name)) {
+            this.manager.setTool('select');
+            return;
+        }
+
+        this.blockName = name;
+        this.engine.canvas.style.cursor = 'crosshair';
+        document.getElementById('status-tool').textContent = `📦 Insert Block [${name}]: Click insertion point`;
+    }
+
+    onMouseDown(world) {
+        if (!this.blockName) return;
+        const snapped = this.manager.applySnap(world);
+        this._insert(snapped.x, snapped.y);
+    }
+
+    async _insert(x, y) {
+        try {
+            const res = await this.engine.api.insert_block(this.blockName, x, y);
+            const data = JSON.parse(res);
+            if (data.success) {
+                if (this.manager.onProjectUpdated) await this.manager.onProjectUpdated();
+                // Stay in tool for multiple insertions? AutoCAD usually does.
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    onMouseMove(world) {
+        if (this.blockName) {
+            const snapped = this.manager.applySnap(world);
+            this.engine.preview = {
+                type: 'block_reference',
+                blockName: this.blockName,
+                x: snapped.x,
+                y: snapped.y,
+                scale: 1.0,
+                rotation: 0.0
+            };
+            this.engine.render();
+        }
+    }
+
+    onKeyDown(key) {
+        if (key === 'Escape') this.manager.setTool('select');
+    }
+}
+
+// ═══════════════════════════════════════════════════
 // ToolManager
 // ═══════════════════════════════════════════════════
 
@@ -651,6 +1140,10 @@ class ToolManager {
             trim: new TrimTool(this),
             offset: new OffsetTool(this),
             copy: new CopyTool(this),
+            scale: new ScaleTool(this),
+            transform: new TransformTool(this),
+            createBlock: new BlockCreateTool(this),
+            insertBlock: new BlockInsertTool(this),
             erase: new EraseTool(this),
         };
     }
@@ -682,8 +1175,9 @@ class ToolManager {
 
     onKeyDown(key, e) {
         if (this.currentTool && this.currentTool.onKeyDown) {
-            this.currentTool.onKeyDown(key, e);
+            return this.currentTool.onKeyDown(key, e);
         }
+        return false;
     }
 
     applySnap(world, basePoint = null) {

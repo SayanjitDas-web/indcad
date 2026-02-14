@@ -122,12 +122,15 @@
             <div class="modal-body">
                 <div class="form-group">
                     <label for="global-api-key">Gemini API Key</label>
-                    <div class="input-with-button">
-                        <input type="password" id="global-api-key" class="form-input"
-                            placeholder="Enter your Gemini API key...">
-                    </div>
-                    <p class="form-hint">This key will be saved globally and used for all your projects.</p>
+                    <input type="password" id="global-api-key" class="form-input"
+                        placeholder="Enter your Gemini API key...">
                 </div>
+                <div class="form-group">
+                    <label for="global-or-key">OpenRouter API Key (Fallback)</label>
+                    <input type="password" id="global-or-key" class="form-input"
+                        placeholder="Enter your OpenRouter API key...">
+                </div>
+                <p class="form-hint">These keys will be saved globally and used for all your projects.</p>
                 <div id="ai-config-status" class="status-msg hidden"></div>
             </div>
             <div class="modal-footer">

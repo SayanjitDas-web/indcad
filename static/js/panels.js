@@ -8,6 +8,7 @@ class PanelsManager {
         this.layersContainer = document.getElementById('layers-list');
         this.propsContainer = document.getElementById('properties-content');
         this.addLayerBtn = document.getElementById('add-layer-btn');
+        this.blocksContainer = document.getElementById('blocks-list');
 
         // Callbacks
         this.onAddLayer = null;
@@ -17,8 +18,15 @@ class PanelsManager {
         this.onToggleLock = null;
         this.onRenameLayer = null;
         this.onPropertyChanged = null;
+        this.onInsertBlock = null;
+        this.onPublishToLibrary = null;
+        this.onImportFromLibrary = null;
+        this.onDeleteFromLibrary = null;
 
         this.layers = [];
+        this.blocks = {}; // Project blocks
+        this.libraryBlocks = []; // Array of {name, updated_at}
+        this.blockTab = 'project';
         this.activeLayerId = null;
         this.selectedShapes = [];
 
@@ -26,8 +34,20 @@ class PanelsManager {
     }
 
     _bindEvents() {
-        this.addLayerBtn.addEventListener('click', () => {
-            if (this.onAddLayer) this.onAddLayer();
+        if (this.addLayerBtn) {
+            this.addLayerBtn.addEventListener('click', () => {
+                if (this.onAddLayer) this.onAddLayer();
+            });
+        }
+
+        // Block tabs
+        const tabBtns = document.querySelectorAll('[data-block-tab]');
+        tabBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.blockTab = btn.dataset.blockTab;
+                tabBtns.forEach(b => b.classList.toggle('active', b === btn));
+                this._renderBlocks();
+            });
         });
     }
 
@@ -40,6 +60,7 @@ class PanelsManager {
     }
 
     _renderLayers() {
+        if (!this.layersContainer) return;
         this.layersContainer.innerHTML = '';
 
         this.layers.forEach(layer => {
@@ -127,6 +148,138 @@ class PanelsManager {
         });
     }
 
+    // ──────────────────────── Blocks ────────────────────────
+
+    updateBlocks(blocks) {
+        this.blocks = blocks;
+        if (this.blockTab === 'project') this._renderBlocks();
+    }
+
+    updateLibraryBlocks(libraryBlocks) {
+        this.libraryBlocks = libraryBlocks;
+        if (this.blockTab === 'library') this._renderBlocks();
+    }
+
+    _renderBlocks() {
+        if (!this.blocksContainer) return;
+        this.blocksContainer.innerHTML = '';
+
+        if (this.blockTab === 'project') {
+            this._renderProjectBlocks();
+        } else {
+            this._renderLibraryBlocks();
+        }
+    }
+
+    _renderProjectBlocks() {
+        const blockNames = Object.keys(this.blocks).sort();
+        if (blockNames.length === 0) {
+            this.blocksContainer.innerHTML = '<div class="prop-empty">No blocks in project</div>';
+            return;
+        }
+
+        blockNames.forEach(name => {
+            const item = document.createElement('div');
+            item.className = 'layer-item block-item';
+
+            const icon = document.createElement('span');
+            icon.textContent = '📦';
+            icon.style.marginRight = '8px';
+
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'layer-name';
+            nameSpan.textContent = name;
+
+            const actions = document.createElement('div');
+            actions.className = 'layer-actions';
+
+            const pubBtn = document.createElement('button');
+            pubBtn.className = 'layer-toggle';
+            pubBtn.textContent = '📤';
+            pubBtn.title = 'Publish to Global Library';
+            pubBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (this.onPublishToLibrary) this.onPublishToLibrary(name);
+            });
+
+            const insBtn = document.createElement('button');
+            insBtn.className = 'layer-toggle';
+            insBtn.textContent = '📥';
+            insBtn.title = 'Insert Block';
+            insBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (this.onInsertBlock) this.onInsertBlock(name);
+            });
+
+            actions.appendChild(pubBtn);
+            actions.appendChild(insBtn);
+
+            item.appendChild(icon);
+            item.appendChild(nameSpan);
+            item.appendChild(actions);
+
+            item.addEventListener('click', () => {
+                if (this.onInsertBlock) this.onInsertBlock(name);
+            });
+
+            this.blocksContainer.appendChild(item);
+        });
+    }
+
+    _renderLibraryBlocks() {
+        if (this.libraryBlocks.length === 0) {
+            this.blocksContainer.innerHTML = '<div class="prop-empty">Global library is empty</div>';
+            return;
+        }
+
+        this.libraryBlocks.forEach(block => {
+            const item = document.createElement('div');
+            item.className = 'layer-item block-item';
+
+            const icon = document.createElement('span');
+            icon.textContent = '🌐';
+            icon.style.marginRight = '8px';
+
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'layer-name';
+            nameSpan.textContent = block.name;
+
+            const actions = document.createElement('div');
+            actions.className = 'layer-actions';
+
+            const impBtn = document.createElement('button');
+            impBtn.className = 'layer-toggle';
+            impBtn.textContent = '📥';
+            impBtn.title = 'Import & Insert';
+            impBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (this.onImportFromLibrary) this.onImportFromLibrary(block.name);
+            });
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'layer-toggle';
+            delBtn.textContent = '✕';
+            delBtn.title = 'Delete from Library';
+            delBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (this.onDeleteFromLibrary) this.onDeleteFromLibrary(block.name);
+            });
+
+            actions.appendChild(impBtn);
+            actions.appendChild(delBtn);
+
+            item.appendChild(icon);
+            item.appendChild(nameSpan);
+            item.appendChild(actions);
+
+            item.addEventListener('click', () => {
+                if (this.onImportFromLibrary) this.onImportFromLibrary(block.name);
+            });
+
+            this.blocksContainer.appendChild(item);
+        });
+    }
+
     // ──────────────────────── Properties ────────────────────────
 
     updateProperties(shapes) {
@@ -136,6 +289,7 @@ class PanelsManager {
 
     _renderProperties() {
         const container = this.propsContainer;
+        if (!container) return;
 
         if (this.selectedShapes.length === 0) {
             container.innerHTML = '<div class="prop-empty">No selection</div>';
@@ -159,7 +313,7 @@ class PanelsManager {
         const geoGroup = this._createGroup('Geometry');
         const fields = this._getGeometryFields(shape);
         fields.forEach(f => {
-            geoGroup.appendChild(this._createPropRow(f.label, f.value, f.key, shape.id));
+            geoGroup.appendChild(this._createPropRow(f.label, f.value, f.key, shape.id, f.type || 'number'));
         });
         container.appendChild(geoGroup);
 
@@ -226,10 +380,12 @@ class PanelsManager {
         const input = document.createElement('input');
         input.type = 'text';
         input.className = 'prop-input';
-        input.value = typeof value === 'number' ? value.toFixed(2) : value;
+
+        // Use Units for numeric formatting
+        input.value = (typeof value === 'number') ? Units.formatLinear(value) : value;
 
         input.addEventListener('change', () => {
-            let val = type === 'number' ? parseFloat(input.value) : input.value;
+            let val = type === 'number' ? Units.parseLinear(input.value) : input.value;
             if (type === 'number' && isNaN(val)) return;
             if (this.onPropertyChanged) this.onPropertyChanged(shapeId, { [key]: val });
         });
@@ -290,8 +446,18 @@ class PanelsManager {
                     { label: 'X2', value: shape.x2, key: 'x2' },
                     { label: 'Y2', value: shape.y2, key: 'y2' },
                 ];
+            case 'block_reference':
+                return [
+                    { label: 'Block', value: shape.blockName, key: 'blockName', type: 'text' },
+                    { label: 'X', value: shape.x, key: 'x' },
+                    { label: 'Y', value: shape.y, key: 'y' },
+                    { label: 'Scale', value: shape.scale || 1.0, key: 'scale' },
+                    { label: 'Rotation', value: shape.rotation || 0.0, key: 'rotation' },
+                ];
             default:
                 return [];
         }
     }
 }
+
+window.PanelsManager = PanelsManager;

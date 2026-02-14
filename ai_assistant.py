@@ -1,74 +1,96 @@
-"""
-IndCAD AI Assistant
-Gemini-powered design assistant and shape generator.
-"""
 import os
 import json
 import time
-import google.generativeai as genai
+from google import genai
+from openai import OpenAI
 from collections import deque
 from dotenv import load_dotenv
 
 class AiAssistant:
-    """Handles interaction with Gemini AI for drawing assistance."""
+    """Handles interaction with Gemini AI and OpenRouter fallback."""
     
-    def __init__(self, api_key=None):
+    def __init__(self, gemini_key=None, openrouter_key=None):
         load_dotenv()
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
+        self.gemini_key = gemini_key or os.environ.get("GEMINI_API_KEY")
+        self.openrouter_key = openrouter_key or os.environ.get("OPENROUTER_API_KEY")
+        self.api_key = self.gemini_key # Backward compatibility
         
-        # Rate limiting: 5 requests per minute
+        self.client = None
+        if self.gemini_key:
+            self.client = genai.Client(api_key=self.gemini_key)
+        
+        self.or_client = None
+        if self.openrouter_key:
+            self.or_client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=self.openrouter_key,
+                default_headers={
+                    "HTTP-Referer": "https://indcad.app",
+                    "X-Title": "IndCAD",
+                }
+            )
+        
+        # Rate limiting: 5 requests per minute for Gemini
         self.request_times = deque(maxlen=5)
-        self.model = genai.GenerativeModel('gemini-2.5-flash')
         self.chat = None
+        self.model_name = 'gemini-2.5-flash'
 
-    def set_api_key(self, api_key, persist=False):
+    def set_api_key(self, api_key, persist=False, provider='gemini'):
         """Update the API key dynamically and optionally persist it."""
-        self.api_key = api_key
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
-            # Reset model/chat to use new key
-            self.model = genai.GenerativeModel('gemini-2.5-flash')
-            self.chat = None
+        if provider == 'gemini':
+            self.gemini_key = api_key
+            self.api_key = api_key
+            if self.gemini_key:
+                self.client = genai.Client(api_key=self.gemini_key)
+                self.chat = None
+        else:
+            self.openrouter_key = api_key
+            if self.openrouter_key:
+                self.or_client = OpenAI(
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key=self.openrouter_key,
+                    default_headers={
+                        "HTTP-Referer": "https://indcad.app",
+                        "X-Title": "IndCAD",
+                    }
+                )
             
-            if persist:
-                try:
-                    # Update .env file
-                    env_path = os.path.join(os.getcwd(), '.env')
-                    lines = []
-                    if os.path.exists(env_path):
-                        with open(env_path, 'r') as f:
-                            lines = f.readlines()
-                    
-                    # Update or add GEMINI_API_KEY
-                    found = False
-                    new_line = f"GEMINI_API_KEY={api_key}\n"
-                    for i, line in enumerate(lines):
-                        if line.startswith('GEMINI_API_KEY='):
-                            lines[i] = new_line
-                            found = True
-                            break
-                    if not found:
-                        lines.append(new_line)
-                    
-                    with open(env_path, 'w') as f:
-                        f.writelines(lines)
-                except Exception as e:
-                    print(f"Failed to persist API key: {e}")
+        if persist:
+            try:
+                env_path = os.path.join(os.getcwd(), '.env')
+                lines = []
+                if os.path.exists(env_path):
+                    with open(env_path, 'r') as f:
+                        lines = f.readlines()
+                
+                key_name = "GEMINI_API_KEY" if provider == 'gemini' else "OPENROUTER_API_KEY"
+                new_line = f"{key_name}={api_key}\n"
+                found = False
+                for i, line in enumerate(lines):
+                    if line.startswith(f'{key_name}='):
+                        lines[i] = new_line
+                        found = True
+                        break
+                if not found:
+                    lines.append(new_line)
+                
+                with open(env_path, 'w') as f:
+                    f.writelines(lines)
+            except Exception as e:
+                print(f"Failed to persist API key: {e}")
         return True
 
-    def get_api_key(self, masked=True):
-        """Get the current API key, masked for security by default."""
-        if not self.api_key: return ""
-        if not masked: return self.api_key
-        if len(self.api_key) <= 8: return "*" * len(self.api_key)
-        return self.api_key[:4] + "*" * (len(self.api_key) - 8) + self.api_key[-4:]
+    def get_api_key(self, masked=True, provider='gemini'):
+        """Get the current API key, masked for security."""
+        key = self.gemini_key if provider == 'gemini' else self.openrouter_key
+        if not key: return ""
+        if not masked: return key
+        if len(key) <= 8: return "*" * len(key)
+        return key[:4] + "*" * (len(key) - 8) + key[-4:]
 
-    def _check_rate_limit(self):
-        """Returns True if request is allowed, False otherwise."""
+    def _check_gemini_rate_limit(self):
+        """Returns True if Gemini request is allowed."""
         now = time.time()
-        # Remove timestamps older than 60 seconds
         while self.request_times and now - self.request_times[0] > 60:
             self.request_times.popleft()
         
@@ -78,12 +100,9 @@ class AiAssistant:
         return False
 
     def get_chat_response(self, prompt, project_context):
-        """Get assistant advice based on current project context."""
-        if not self.api_key:
-            return "Error: Gemini API key not found. Please set it in the AI Assistant settings (gear icon)."
-        
-        if not self._check_rate_limit():
-            return "Error: Rate limit exceeded (5 requests per minute). Please wait a moment."
+        """Get assistant advice with fallback support."""
+        if not self.gemini_key and not self.openrouter_key:
+            return "Error: No AI API keys found. Please set them in settings."
 
         system_instruction = f"""
         You are IndCAD AI, a professional CAD drawing assistant.
@@ -91,28 +110,74 @@ class AiAssistant:
         
         Capabilities:
         1. Design Advice: Provide concise, professional CAD/architecture advice.
-        2. Drawing Content: If you want to DRAW something, output a JSON block with "draw" key.
-        3. Exporting: Mention that the user can click the "Export DXF" button to save their design directly to their machine as a professional CAD file. You can suggest this when a design is completed.
+        2. Drawing Content: If you want to DRAW something, output a JSON block with "draw" key containing an array of shapes.
+        3. Exporting: Mention that the user can click the "Export DXF" button to save their design directly.
         
-        Supported shape types: line, rectangle, circle, arc, polyline, text.
-        Coordinates: Use the provided context to align with existing shapes.
-        Format: Always prioritize a helpful text response. If drawing, strictly follow the JSON format above.
+        CRITICAL: Layer and Color Awareness:
+        - The current active layer is '{project_context.get('activeLayer', 'layer-0')}' with color '{project_context.get('activeLayerColor', '#ffffff')}'.
+        - You SHOULD use this color for your drawings by default unless the user asks for something else.
+        - Ensure all shapes have a 'color' and 'layer' field. Use the activeLayer ID for the 'layer' field.
+        
+        Shape Field Names (Schema):
+        - line: x1, y1, x2, y2, color, layer
+        - rectangle: x, y, width, height, color, layer
+        - circle: cx, cy, radius, color, layer
+        - arc: cx, cy, radius, startAngle, endAngle, color, layer
+        - polyline: points (array of [x,y]), closed (bool), color, layer
+        - text: x, y, content, fontSize, color, layer
+        
+        Units & Measurements:
+        The project uses dynamic CAD units (see 'settings' in context).
+        - Architectural/Engineering: 1 unit = 1 inch. (e.g., 5'6" should be treated as 66 units).
+        - Decimal/Others: 1 unit = 1 millimeter (or generic unit).
+        - Always output pure numbers in JSON. If a user asks for "10 feet", convert to the appropriate numeric value based on the current system.
+        
+        Coordinates: Center around 0,0 unless the context suggests otherwise.
+        Format: Always provide a helpful text response followed by a JSON code block if drawing.
         """
-        
-        if not self.chat:
-            self.chat = self.model.start_chat(history=[])
-            # Lead with system instruction
-            full_prompt = f"{system_instruction}\n\nUser: {prompt}"
-        else:
-            full_prompt = prompt
 
+        self._current_context = project_context # Temp store for normalization
+
+        # Try Gemini First
+        if self.gemini_key and self.client and self._check_gemini_rate_limit():
+            try:
+                if not self.chat:
+                    self.chat = self.client.chats.create(
+                        model=self.model_name,
+                        config={'system_instruction': system_instruction}
+                    )
+                
+                response = self.chat.send_message(prompt)
+                return self._parse_mixed_response(response.text)
+            except Exception as e:
+                print(f"Gemini error, trying fallback if available: {e}")
+                if not self.openrouter_key:
+                    return {"text": f"Gemini Error (and no fallback): {str(e)}", "draw": []}
+
+        # Fallback to OpenRouter
+        if self.openrouter_key:
+            return self._openrouter_chat(prompt, system_instruction)
+        
+        return {"text": "Error: Gemini rate limit reached and no OpenRouter key provided.", "draw": []}
+
+    def _openrouter_chat(self, prompt, system_instruction):
+        """Fallback chat using OpenRouter (Llama 3.1) - Using OpenAI SDK."""
         try:
-            response = self.chat.send_message(full_prompt)
-            # Simple extractor for mixed text/json
-            text = response.text
+            if not self.or_client:
+                return {"text": "Error: OpenRouter client not initialized.", "draw": []}
+            
+            response = self.or_client.chat.completions.create(
+                model="openrouter/free",
+                messages=[
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            text = response.choices[0].message.content
             return self._parse_mixed_response(text)
         except Exception as e:
-            return {"text": f"Error: {str(e)}", "draw": []}
+            return {"text": f"Fallback Error: {str(e)}", "draw": []}
 
     def _parse_mixed_response(self, raw_text):
         """Extract text and drawing commands from AI response."""
@@ -125,25 +190,77 @@ class AiAssistant:
                 for part in parts[1:]:
                     json_str = part.split("```")[0].strip()
                     data = json.loads(json_str)
+                    
+                    shapes = []
                     if isinstance(data, dict):
                         if "text" in data: result["text"] = str(data["text"])
-                        if "draw" in data: result["draw"] = data["draw"]
+                        if "draw" in data: shapes = data["draw"]
                     elif isinstance(data, list):
-                        # Backward compat for simple arrays
-                        result["draw"] = data
+                        shapes = data
+                        
+                    # Normalize shapes
+                    for s in shapes:
+                        if not isinstance(s, dict): continue
+                        ns = self._normalize_shape(s)
+                        if ns: result["draw"].append(ns)
             except:
                 pass # Fallback to raw text if JSON is malformed
         
         return result
 
-    def generate_starting_drawing(self, name, description):
-        """Generate a list of IndCAD shapes for a new project starting point."""
-        if not self.api_key:
-            return None
+    def _normalize_shape(self, s):
+        """Normalize AI-generated shape data to IndCAD format."""
+        if 'type' not in s: return None
+        stype = s['type'].lower()
         
-        if not self._check_rate_limit():
-            return None
+        ns = {"type": stype}
+        
+        # Common mapping: color and layer awareness
+        ctx = getattr(self, '_current_context', {})
+        default_color = ctx.get('activeLayerColor', '#ffffff')
+        default_layer = ctx.get('activeLayer', 'layer-0')
 
+        ns['color'] = s.get('color', default_color)
+        ns['layer'] = s.get('layer', s.get('layer_id', default_layer))
+        
+        if stype == 'line':
+            ns['x1'] = s.get('x1', 0)
+            ns['y1'] = s.get('y1', 0)
+            ns['x2'] = s.get('x2', 0)
+            ns['y2'] = s.get('y2', 0)
+        elif stype == 'rectangle':
+            ns['x'] = s.get('x', 0)
+            ns['y'] = s.get('y', 0)
+            ns['width'] = s.get('width', 10)
+            ns['height'] = s.get('height', 10)
+        elif stype == 'circle' or stype == 'arc':
+            # Handle AI "center": [x, y] or "cx", "cy"
+            center = s.get('center')
+            if isinstance(center, list) and len(center) >= 2:
+                ns['cx'], ns['cy'] = center[0], center[1]
+            else:
+                ns['cx'] = s.get('cx', s.get('x', 0))
+                ns['cy'] = s.get('cy', s.get('y', 0))
+            
+            ns['radius'] = s.get('radius', 5)
+            if stype == 'arc':
+                ns['startAngle'] = s.get('startAngle', 0)
+                ns['endAngle'] = s.get('endAngle', 90)
+        elif stype == 'polyline':
+            ns['points'] = s.get('points', [])
+            ns['closed'] = s.get('closed', False)
+        elif stype == 'text':
+            ns['x'] = s.get('x', 0)
+            ns['y'] = s.get('y', 0)
+            ns['content'] = s.get('content', 'AI Text')
+            ns['fontSize'] = s.get('fontSize', 14)
+        else:
+            return None # Unsupported type
+            
+        return ns
+
+    def generate_starting_drawing(self, name, description):
+        """Generate a list of IndCAD shapes with fallback support."""
         prompt = f"""
         Generate a professional CAD starting drawing for a project named '{name}'.
         Project Description: {description}
@@ -161,16 +278,42 @@ class AiAssistant:
         Ensure coordinates are centered around 0,0.
         """
 
+        # Try Gemini
+        if self.gemini_key and self.client and self._check_gemini_rate_limit():
+            try:
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt
+                )
+                return self._parse_generation_text(response.text)
+            except Exception as e:
+                print(f"Gemini generation error: {e}")
+
+        # Try OpenRouter
+        if self.openrouter_key and self.or_client:
+            try:
+                response = self.or_client.chat.completions.create(
+                    model="openrouter/free",
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                text = response.choices[0].message.content
+                return self._parse_generation_text(text)
+            except Exception as e:
+                print(f"OpenRouter generation error: {e}")
+
+        return None
+
+    def _parse_generation_text(self, text):
+        """Parse JSON from AI generation text."""
+        text = text.strip()
+        if "```" in text:
+            parts = text.split("```")
+            for part in parts:
+                if part.strip().startswith("[") or part.strip().startswith("json"):
+                    text = part.strip()
+                    if text.startswith("json"): text = text[4:].strip()
+                    break
         try:
-            response = self.model.generate_content(prompt)
-            # Find JSON in response (Gemini sometimes adds ```json blocks)
-            text = response.text.strip()
-            if "```" in text:
-                text = text.split("```")[1]
-                if text.startswith("json"):
-                    text = text[4:]
-            
             return json.loads(text)
-        except Exception as e:
-            print(f"Generation error: {e}")
+        except:
             return None
