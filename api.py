@@ -12,6 +12,7 @@ import geometry_engine as geo
 from database import Database
 from dxf_exporter import DXFExporter
 from ai_assistant import AiAssistant
+from cad_designer_agent import CADDesignerAgent
 
 
 class Api:
@@ -21,6 +22,7 @@ class Api:
         self.pm = ProjectManager()
         self.db = Database()
         self.ai = AiAssistant()
+        self.agent = CADDesignerAgent(self.ai)
         self._window = None
         self._current_project_id = None
 
@@ -891,22 +893,80 @@ class Api:
     # ──────────────────────── AI Assistant ────────────────────────
 
     def _get_ai_context(self):
-        """Build summarized project context for the AI with layer awareness."""
+        """Build summarized project context for the AI with layer and shape awareness."""
         layers = self.pm.project.get('layers', [])
         active_layer_id = self.pm.project.get('activeLayer', 'layer-0')
         layer_colors = {l['id']: l.get('color', '#ffffff') for l in layers}
-        
+        shapes = self.pm.project.get('shapes', [])
+
+        # Shape type counts
+        type_counts = {}
+        for s in shapes:
+            if isinstance(s, dict):
+                t = s.get('type', 'unknown')
+                type_counts[t] = type_counts.get(t, 0) + 1
+
+        # Bounding box
+        min_x = min_y = float('inf')
+        max_x = max_y = float('-inf')
+        for s in shapes:
+            if not isinstance(s, dict):
+                continue
+            st = s.get('type', '')
+            try:
+                if st == 'line':
+                    min_x = min(min_x, s['x1'], s['x2'])
+                    min_y = min(min_y, s['y1'], s['y2'])
+                    max_x = max(max_x, s['x1'], s['x2'])
+                    max_y = max(max_y, s['y1'], s['y2'])
+                elif st == 'rectangle':
+                    min_x = min(min_x, s['x'])
+                    min_y = min(min_y, s['y'])
+                    max_x = max(max_x, s['x'] + s['width'])
+                    max_y = max(max_y, s['y'] + s['height'])
+                elif st in ('circle', 'arc'):
+                    r = s.get('radius', 0)
+                    min_x = min(min_x, s['cx'] - r)
+                    min_y = min(min_y, s['cy'] - r)
+                    max_x = max(max_x, s['cx'] + r)
+                    max_y = max(max_y, s['cy'] + r)
+                elif st == 'ellipse':
+                    min_x = min(min_x, s['cx'] - s.get('rx', 0))
+                    min_y = min(min_y, s['cy'] - s.get('ry', 0))
+                    max_x = max(max_x, s['cx'] + s.get('rx', 0))
+                    max_y = max(max_y, s['cy'] + s.get('ry', 0))
+                elif st == 'polyline':
+                    for p in s.get('points', []):
+                        min_x = min(min_x, p[0])
+                        min_y = min(min_y, p[1])
+                        max_x = max(max_x, p[0])
+                        max_y = max(max_y, p[1])
+                elif st == 'text':
+                    min_x = min(min_x, s.get('x', 0))
+                    min_y = min(min_y, s.get('y', 0))
+                    max_x = max(max_x, s.get('x', 0))
+                    max_y = max(max_y, s.get('y', 0))
+            except Exception:
+                pass
+
+        bbox = None
+        if min_x != float('inf'):
+            bbox = {'min_x': round(min_x, 2), 'min_y': round(min_y, 2),
+                    'max_x': round(max_x, 2), 'max_y': round(max_y, 2)}
+
         return {
             'name': self.pm.project.get('name', 'Untitled'),
             'settings': self.pm.project.get('settings', {}),
-            'shapes_count': len(self.pm.project.get('shapes', [])),
+            'shapes_count': len(shapes),
+            'shape_types': type_counts,
+            'bounding_box': bbox,
             'layers': layers,
             'activeLayer': active_layer_id,
             'activeLayerColor': layer_colors.get(active_layer_id, '#ffffff'),
             'shapes_summary': [
                 {'type': s.get('type', 'unknown'), 'id': s.get('id', 'unknown'), 'layer': s.get('layer', 'Unknown')} 
-                for s in self.pm.project.get('shapes', []) if isinstance(s, dict)
-            ]
+                for s in shapes if isinstance(s, dict)
+            ][:50]  # Limit summary to avoid huge context
         }
 
     def ai_chat(self, prompt):
@@ -935,23 +995,142 @@ class Api:
             return json.dumps({'success': True, 'shapes_count': len(shapes)})
         return json.dumps({'success': False, 'error': 'AI Generation failed or rate limited.'})
 
+    def ai_generate_from_selection(self, prompt, shape_ids_json):
+        """Generate new shapes based on selected shapes + user prompt.
+        
+        The selected shapes' full geometry is sent to the AI as context,
+        enabling prompts like 'add furniture to this room' or 'mirror this'.
+        """
+        shape_ids = json.loads(shape_ids_json)
+        
+        # Gather full data for selected shapes
+        selected_shapes = []
+        for sid in shape_ids:
+            s = self.pm.get_shape_by_id(sid)
+            if s:
+                selected_shapes.append(s)
+        
+        if not selected_shapes:
+            return json.dumps({'text': 'No shapes selected.', 'draw': []})
+        
+        # Build a rich context with selected shape details
+        context = self._get_ai_context()
+        
+        # Compute selection bounding box
+        sel_min_x = sel_min_y = float('inf')
+        sel_max_x = sel_max_y = float('-inf')
+        for s in selected_shapes:
+            st = s.get('type', '')
+            try:
+                if st == 'line':
+                    sel_min_x = min(sel_min_x, s['x1'], s['x2'])
+                    sel_min_y = min(sel_min_y, s['y1'], s['y2'])
+                    sel_max_x = max(sel_max_x, s['x1'], s['x2'])
+                    sel_max_y = max(sel_max_y, s['y1'], s['y2'])
+                elif st == 'rectangle':
+                    sel_min_x = min(sel_min_x, s['x'])
+                    sel_min_y = min(sel_min_y, s['y'])
+                    sel_max_x = max(sel_max_x, s['x'] + s['width'])
+                    sel_max_y = max(sel_max_y, s['y'] + s['height'])
+                elif st in ('circle', 'arc'):
+                    r = s.get('radius', 0)
+                    sel_min_x = min(sel_min_x, s['cx'] - r)
+                    sel_min_y = min(sel_min_y, s['cy'] - r)
+                    sel_max_x = max(sel_max_x, s['cx'] + r)
+                    sel_max_y = max(sel_max_y, s['cy'] + r)
+                elif st == 'ellipse':
+                    sel_min_x = min(sel_min_x, s['cx'] - s.get('rx', 0))
+                    sel_min_y = min(sel_min_y, s['cy'] - s.get('ry', 0))
+                    sel_max_x = max(sel_max_x, s['cx'] + s.get('rx', 0))
+                    sel_max_y = max(sel_max_y, s['cy'] + s.get('ry', 0))
+                elif st == 'polyline':
+                    for p in s.get('points', []):
+                        sel_min_x = min(sel_min_x, p[0])
+                        sel_min_y = min(sel_min_y, p[1])
+                        sel_max_x = max(sel_max_x, p[0])
+                        sel_max_y = max(sel_max_y, p[1])
+                elif st == 'text':
+                    sel_min_x = min(sel_min_x, s.get('x', 0))
+                    sel_min_y = min(sel_min_y, s.get('y', 0))
+                    sel_max_x = max(sel_max_x, s.get('x', 0))
+                    sel_max_y = max(sel_max_y, s.get('y', 0))
+            except Exception:
+                pass
+        
+        sel_bbox = None
+        if sel_min_x != float('inf'):
+            sel_bbox = {
+                'min_x': round(sel_min_x, 2), 'min_y': round(sel_min_y, 2),
+                'max_x': round(sel_max_x, 2), 'max_y': round(sel_max_y, 2),
+                'width': round(sel_max_x - sel_min_x, 2),
+                'height': round(sel_max_y - sel_min_y, 2),
+                'center_x': round((sel_min_x + sel_max_x) / 2, 2),
+                'center_y': round((sel_min_y + sel_max_y) / 2, 2),
+            }
+        
+        # Build an enhanced prompt with selection context
+        shape_descriptions = []
+        for s in selected_shapes:
+            desc = json.dumps(s, default=str)
+            shape_descriptions.append(desc)
+        
+        enhanced_prompt = f"""SELECTION-BASED GENERATION:
+The user has selected {len(selected_shapes)} shape(s) on the canvas.
+
+Selected shapes (full geometry):
+{chr(10).join(shape_descriptions)}
+
+Selection bounding box: {json.dumps(sel_bbox)}
+
+User request: {prompt}
+
+IMPORTANT: Generate NEW shapes that work with/relate to the selected shapes.
+- Position new shapes relative to the selection's bounding box.
+- Match the style (color, lineWidth, layer) of the selected shapes unless the user asks otherwise.
+- Do NOT recreate the selected shapes — only add NEW ones."""
+        
+        # Route through the agent (design mode + standard chat both work)
+        result = self.agent.design(enhanced_prompt, context)
+        
+        if isinstance(result, dict):
+            if result.get('draw'):
+                for shape in result['draw']:
+                    self.pm.add_shape(shape)
+                self.sync_project_to_db()
+            return json.dumps(result)
+        
+        return json.dumps({'text': str(result), 'draw': []})
+
     def update_ai_config(self, api_key, provider='gemini', persist=False):
         """Update the AI assistant's API key and optionally persist it."""
         self.ai.set_api_key(api_key, persist=persist, provider=provider)
         return json.dumps({'success': True})
 
     def import_html_snippet(self, html_code, x=0, y=0):
-        """Translate HTML/CSS/SVG into CAD shapes and add to project."""
-        from html_cad_kernel import HTMLCADKernel
-        kernel = HTMLCADKernel(base_x=float(x), base_y=float(y))
+        """Translate HTML/CSS/SVG into CAD shapes via the CAD designer agent."""
         try:
-            shapes = kernel.translate(html_code)
+            context = self._get_ai_context()
+            shapes = self.agent.design_from_html(html_code, float(x), float(y), context)
             for s in shapes:
                 self.pm.add_shape(s)
             self.sync_project_to_db()
             return json.dumps({'success': True, 'shapes_count': len(shapes)})
         except Exception as e:
             return json.dumps({'success': False, 'error': str(e)})
+
+    def design_with_agent(self, prompt):
+        """Full AI + HTML kernel design pipeline via CADDesignerAgent."""
+        context = self._get_ai_context()
+        result = self.agent.design(prompt, context)
+        
+        if isinstance(result, dict):
+            if result.get('draw'):
+                for shape in result['draw']:
+                    self.pm.add_shape(shape)
+                self.sync_project_to_db()
+            return json.dumps(result)
+        
+        return json.dumps({'text': str(result), 'draw': []})
 
     def get_ai_config(self):
         """Retrieve the current AI configurations (masked keys)."""

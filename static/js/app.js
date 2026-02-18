@@ -215,6 +215,9 @@ class IndCADApp {
             this.engine.setSelection(selectedIds);
             const shapes = this.engine.shapes.filter(s => selectedIds.includes(s.id));
             this.panels.updateProperties(shapes);
+            // Track selection for AI context
+            this._selectedShapeIds = selectedIds;
+            this._updateAiSelectionBadge();
         };
 
         this.tools.onToolChanged = (name) => {
@@ -691,6 +694,9 @@ class IndCADApp {
 
         if (!toggleBtn || !panel) return;
 
+        // Design mode toggle state
+        this._aiDesignMode = false;
+
         toggleBtn.addEventListener('click', () => panel.classList.toggle('hidden'));
         closeBtn.addEventListener('click', () => {
             panel.classList.add('hidden');
@@ -701,6 +707,34 @@ class IndCADApp {
             const isHidden = settingsPanel.classList.toggle('hidden');
             if (!isHidden) this._refreshAiConfig();
         });
+
+        // Design mode toggle button — injected dynamically
+        const inputRow = sendBtn.parentElement;
+        if (inputRow) {
+            const designBtn = document.createElement('button');
+            designBtn.id = 'ai-design-mode-btn';
+            designBtn.className = 'ai-btn';
+            designBtn.title = 'Toggle Design Mode (AI generates SVG shapes)';
+            designBtn.textContent = '✨ Design';
+            designBtn.style.cssText = 'font-size: 11px; padding: 4px 8px; border-radius: 4px; cursor: pointer; background: transparent; color: #888; border: 1px solid #444; margin-right: 4px; transition: all 0.2s;';
+            designBtn.addEventListener('click', () => {
+                this._aiDesignMode = !this._aiDesignMode;
+                if (this._aiDesignMode) {
+                    designBtn.style.background = '#7c3aed';
+                    designBtn.style.color = '#fff';
+                    designBtn.style.borderColor = '#7c3aed';
+                    designBtn.textContent = '✨ Design ON';
+                    this._addAiMessage('🎨 Design Mode ON — AI will generate advanced SVG shapes.', 'bot');
+                } else {
+                    designBtn.style.background = 'transparent';
+                    designBtn.style.color = '#888';
+                    designBtn.style.borderColor = '#444';
+                    designBtn.textContent = '✨ Design';
+                    this._addAiMessage('💬 Design Mode OFF — Standard chat mode.', 'bot');
+                }
+            });
+            inputRow.insertBefore(designBtn, sendBtn);
+        }
 
         saveKeyBtn.addEventListener('click', async () => {
             const key = keyInput.value.trim();
@@ -747,6 +781,14 @@ class IndCADApp {
                 }
             });
         }
+
+        // Selection badge for AI panel — shows when shapes are selected
+        this._aiSelectionBadge = document.createElement('div');
+        this._aiSelectionBadge.id = 'ai-selection-badge';
+        this._aiSelectionBadge.style.cssText = 'display:none; padding:4px 10px; font-size:11px; color:#7c3aed; background:rgba(124,58,237,0.12); border-radius:4px; margin-bottom:4px; text-align:center; font-weight:600;';
+        if (inputRow) {
+            inputRow.parentElement.insertBefore(this._aiSelectionBadge, inputRow);
+        }
     }
 
     async _handleAIChat() {
@@ -756,8 +798,16 @@ class IndCADApp {
         const prompt = input.value.trim();
         if (!prompt) return;
 
-        // Add user message UI
-        this._addAiMessage(prompt, 'user');
+        // Check if shapes are selected for context-aware generation
+        const selectedIds = this._selectedShapeIds || [];
+        const hasSelection = selectedIds.length > 0;
+
+        // Add user message UI with selection indicator
+        if (hasSelection) {
+            this._addAiMessage(`🎯 [${selectedIds.length} shape(s) selected] ${prompt}`, 'user');
+        } else {
+            this._addAiMessage(prompt, 'user');
+        }
         input.value = '';
 
         // Show loading
@@ -765,7 +815,17 @@ class IndCADApp {
         msgContainer.scrollTop = msgContainer.scrollHeight;
 
         try {
-            const result = await this.api.ai_chat(prompt);
+            let result;
+            if (hasSelection) {
+                // Selection-based generation — pass selected shape IDs + prompt
+                result = await this.api.ai_generate_from_selection(
+                    prompt, JSON.stringify(selectedIds)
+                );
+            } else if (this._aiDesignMode) {
+                result = await this.api.design_with_agent(prompt);
+            } else {
+                result = await this.api.ai_chat(prompt);
+            }
             const data = JSON.parse(result);
 
             // Add bot message
@@ -778,6 +838,7 @@ class IndCADApp {
 
             // If drawing, sync engine
             if (data.draw && data.draw.length > 0) {
+                this._addAiMessage(`✅ Generated ${data.draw.length} shapes.`, 'bot');
                 await this._loadProjectData();
                 this.engine.zoomToFit();
             }
@@ -837,6 +898,17 @@ class IndCADApp {
         }
     }
 
+    _updateAiSelectionBadge() {
+        if (!this._aiSelectionBadge) return;
+        const ids = this._selectedShapeIds || [];
+        if (ids.length > 0) {
+            this._aiSelectionBadge.textContent = `\ud83c\udfaf ${ids.length} shape(s) selected \u2014 AI will use them as context`;
+            this._aiSelectionBadge.style.display = 'block';
+        } else {
+            this._aiSelectionBadge.style.display = 'none';
+        }
+    }
+
     _addAiMessage(text, type) {
         const msgContainer = document.getElementById('ai-messages');
         const loading = document.getElementById('ai-loading');
@@ -858,7 +930,10 @@ class IndCADApp {
         text = String(text);
 
         // Handle code blocks first
-        let html = text.replace(/```(json)?([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+        let html = text.replace(/```(json|svg|html)?([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+
+        // Render SVG generated badges
+        html = html.replace(/\[SVG design generated ✓\]/g, '<span style="color:#7c3aed;font-weight:600;">✅ SVG design generated</span>');
 
         html = html
             .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold

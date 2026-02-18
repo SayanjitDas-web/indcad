@@ -111,29 +111,39 @@ class AiAssistant:
         Capabilities:
         1. Design Advice: Provide concise, professional CAD/architecture advice.
         2. Drawing Content: If you want to DRAW something, output a JSON block with "draw" key containing an array of shapes.
-        3. Exporting: Mention that the user can click the "Export DXF" button to save their design directly.
+        3. SVG Drawing: For complex designs with curves, arcs, or detailed geometry, output SVG in a ```svg code block.
+        4. Exporting: Mention that the user can click the "Export DXF" button to save their design directly.
         
         CRITICAL: Layer and Color Awareness:
         - The current active layer is '{project_context.get('activeLayer', 'layer-0')}' with color '{project_context.get('activeLayerColor', '#ffffff')}'.
         - You SHOULD use this color for your drawings by default unless the user asks for something else.
-        - Ensure all shapes have a 'color' and 'layer' field. Use the activeLayer ID for the 'layer' field.
+        - Ensure all shapes have a 'color', 'layer', and 'lineWidth' field.
         
-        Shape Field Names (Schema):
-        - line: x1, y1, x2, y2, color, layer
-        - rectangle: x, y, width, height, color, layer
-        - circle: cx, cy, radius, color, layer
-        - arc: cx, cy, radius, startAngle, endAngle, color, layer
-        - polyline: points (array of [x,y]), closed (bool), color, layer
+        ALL Shape Types (Schema):
+        - line: x1, y1, x2, y2, color, layer, lineWidth
+        - rectangle: x, y, width, height, color, layer, lineWidth
+        - circle: cx, cy, radius, color, layer, lineWidth
+        - arc: cx, cy, radius, startAngle, endAngle, color, layer, lineWidth
+        - ellipse: cx, cy, rx, ry, color, layer, lineWidth
+        - polyline: points (array of [x,y]), closed (bool), color, layer, lineWidth
         - text: x, y, content, fontSize, color, layer
+        
+        ADVANCED SVG MODE:
+        For complex designs (floor plans, mechanical parts, curves), output SVG:
+        ```svg
+        <svg viewBox="0 0 500 500"><!-- your design --></svg>
+        ```
+        SVG supports full <path> d-attribute: M, L, H, V, C (cubic bézier),
+        Q (quadratic), S, T, A (arc), Z. Use <g transform="..."> for grouping.
         
         Units & Measurements:
         The project uses dynamic CAD units (see 'settings' in context).
         - Architectural/Engineering: 1 unit = 1 inch. (e.g., 5'6" should be treated as 66 units).
         - Decimal/Others: 1 unit = 1 millimeter (or generic unit).
-        - Always output pure numbers in JSON. If a user asks for "10 feet", convert to the appropriate numeric value based on the current system.
+        - Always output pure numbers in JSON.
         
         Coordinates: Center around 0,0 unless the context suggests otherwise.
-        Format: Always provide a helpful text response followed by a JSON code block if drawing.
+        Format: Always provide a helpful text response followed by a JSON code block or SVG block if drawing.
         """
 
         self._current_context = project_context # Temp store for normalization
@@ -180,10 +190,11 @@ class AiAssistant:
             return {"text": f"Fallback Error: {str(e)}", "draw": []}
 
     def _parse_mixed_response(self, raw_text):
-        """Extract text and drawing commands from AI response."""
+        """Extract text, JSON drawing commands, and SVG blocks from AI response."""
+        import re
         result = {"text": raw_text, "draw": []}
         
-        # Look for code blocks
+        # 1. Parse JSON code blocks
         if "```json" in raw_text:
             try:
                 parts = raw_text.split("```json")
@@ -198,13 +209,39 @@ class AiAssistant:
                     elif isinstance(data, list):
                         shapes = data
                         
-                    # Normalize shapes
                     for s in shapes:
                         if not isinstance(s, dict): continue
                         ns = self._normalize_shape(s)
                         if ns: result["draw"].append(ns)
             except:
-                pass # Fallback to raw text if JSON is malformed
+                pass
+        
+        # 2. Parse SVG code blocks → convert via HTMLCADKernel
+        svg_blocks = re.findall(r'```(?:svg|html)\s*\n(.*?)```', raw_text, re.DOTALL | re.IGNORECASE)
+        if not svg_blocks:
+            svg_blocks = re.findall(r'(<svg[^>]*>.*?</svg>)', raw_text, re.DOTALL | re.IGNORECASE)
+        
+        if svg_blocks:
+            try:
+                from html_cad_kernel import HTMLCADKernel
+                for block in svg_blocks:
+                    kernel = HTMLCADKernel()
+                    svg_shapes = kernel.translate(block)
+                    result["draw"].extend(svg_shapes)
+            except Exception as e:
+                print(f"SVG kernel conversion error: {e}")
+        
+        # Clean ALL code blocks from display text — shapes render on canvas, not in chat
+        clean = result['text']
+        # Remove JSON code blocks
+        clean = re.sub(r'```json\s*\n.*?```', '', clean, flags=re.DOTALL | re.IGNORECASE)
+        # Remove SVG/HTML code blocks
+        clean = re.sub(r'```(?:svg|html)\s*\n.*?```', '', clean, flags=re.DOTALL | re.IGNORECASE)
+        # Remove inline <svg> tags
+        clean = re.sub(r'<svg[^>]*>.*?</svg>', '', clean, flags=re.DOTALL | re.IGNORECASE)
+        # Clean up excess whitespace
+        clean = re.sub(r'\n{3,}', '\n\n', clean).strip()
+        result['text'] = clean
         
         return result
 
@@ -246,6 +283,15 @@ class AiAssistant:
             if stype == 'arc':
                 ns['startAngle'] = s.get('startAngle', 0)
                 ns['endAngle'] = s.get('endAngle', 90)
+        elif stype == 'ellipse':
+            center = s.get('center')
+            if isinstance(center, list) and len(center) >= 2:
+                ns['cx'], ns['cy'] = center[0], center[1]
+            else:
+                ns['cx'] = s.get('cx', s.get('x', 0))
+                ns['cy'] = s.get('cy', s.get('y', 0))
+            ns['rx'] = s.get('rx', 10)
+            ns['ry'] = s.get('ry', 10)
         elif stype == 'polyline':
             ns['points'] = s.get('points', [])
             ns['closed'] = s.get('closed', False)
@@ -256,6 +302,9 @@ class AiAssistant:
             ns['fontSize'] = s.get('fontSize', 14)
         else:
             return None # Unsupported type
+        
+        # Common: lineWidth
+        ns['lineWidth'] = s.get('lineWidth', 1)
             
         return ns
 
@@ -267,11 +316,12 @@ class AiAssistant:
         
         Output ONLY a valid JSON array of IndCAD shapes. Do not include any other text or markdown blocks.
         Supported shape types and required fields:
-        - line: x1, y1, x2, y2, color
-        - rectangle: x, y, width, height, color
-        - circle: cx, cy, radius, color
-        - arc: cx, cy, radius, startAngle, endAngle, color
-        - polyline: points (array of [x,y]), closed (bool), color
+        - line: x1, y1, x2, y2, color, lineWidth
+        - rectangle: x, y, width, height, color, lineWidth
+        - circle: cx, cy, radius, color, lineWidth
+        - arc: cx, cy, radius, startAngle, endAngle, color, lineWidth
+        - ellipse: cx, cy, rx, ry, color, lineWidth
+        - polyline: points (array of [x,y]), closed (bool), color, lineWidth
         - text: x, y, content, fontSize, color
         
         Keep it simple but professional (e.g., if it's a house, draw a few walls and a door).
