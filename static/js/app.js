@@ -651,6 +651,9 @@ class IndCADApp {
             'grid': null, 'snap': null, 'ortho': null,
             'block': 'createBlock', 'insert': 'insertBlock', 'i': 'insertBlock',
             'b': 'createBlock',
+            'array': 'array', 'ar': 'array',
+            'scale': 'scale', 'sc': 'scale',
+            'fillet': 'fillet', 'f': 'fillet', 'fi': 'fillet',
         };
 
         if (lower in commandMap) {

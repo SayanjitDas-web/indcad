@@ -735,6 +735,194 @@ class Api:
 
         return json.dumps({'success': True})
 
+    def fillet_shapes(self, id1, id2, radius, click_x, click_y):
+        """Apply fillet (round corner) between two lines.
+        
+        Uses AutoCAD-style deterministic geometry:
+        1. Find intersection of infinite lines (IX)
+        2. Determine 'far' endpoints (away from IX) to identify kept segments
+        3. Compute offset normals toward interior angle using dot products
+        4. Find arc center at intersection of offset lines
+        5. Project center onto originals for tangent points
+        6. Determine correct arc sweep direction
+        """
+        try:
+            s1 = self.pm.get_shape_by_id(id1)
+            s2 = self.pm.get_shape_by_id(id2)
+            if not s1 or not s2:
+                return json.dumps({'success': False, 'message': 'Shapes not found'})
+            
+            if s1['type'] != 'line' or s2['type'] != 'line':
+                return json.dumps({'success': False, 'message': 'Fillet currently supports lines only'})
+            
+            radius = float(radius)
+            
+            p1 = [float(s1['x1']), float(s1['y1'])]
+            p2 = [float(s1['x2']), float(s1['y2'])]
+            p3 = [float(s2['x1']), float(s2['y1'])]
+            p4 = [float(s2['x2']), float(s2['y2'])]
+            
+            # Step 1: Find intersection of infinite lines
+            ix = self._line_line_intersect_inf(p1, p2, p3, p4)
+            if ix is None:
+                return json.dumps({'success': False, 'message': 'Lines are parallel'})
+            
+            # Step 2: Determine "far" endpoints — the ones we KEEP (farther from IX)
+            # Near endpoints get trimmed to tangent points
+            if self._pt_dist(p1, ix) >= self._pt_dist(p2, ix):
+                far1, near1, near1_is_p1 = p1, p2, False
+            else:
+                far1, near1, near1_is_p1 = p2, p1, True
+            
+            if self._pt_dist(p3, ix) >= self._pt_dist(p4, ix):
+                far2, near2, near2_is_p3 = p3, p4, False
+            else:
+                far2, near2, near2_is_p3 = p4, p3, True
+            
+            if radius < 1e-6:
+                # Zero radius = clean corner (extend/trim to intersection)
+                s1_new = copy.deepcopy(s1)
+                s2_new = copy.deepcopy(s2)
+                if near1_is_p1:
+                    s1_new['x1'], s1_new['y1'] = ix
+                else:
+                    s1_new['x2'], s1_new['y2'] = ix
+                if near2_is_p3:
+                    s2_new['x1'], s2_new['y1'] = ix
+                else:
+                    s2_new['x2'], s2_new['y2'] = ix
+                self.pm.modify_shape(id1, s1_new)
+                self.pm.modify_shape(id2, s2_new)
+                return json.dumps({'success': True, 'arc': False})
+            
+            # Step 3: Direction vectors from IX toward far endpoints
+            v1 = [far1[0] - ix[0], far1[1] - ix[1]]
+            v2 = [far2[0] - ix[0], far2[1] - ix[1]]
+            len_v1 = math.sqrt(v1[0]**2 + v1[1]**2)
+            len_v2 = math.sqrt(v2[0]**2 + v2[1]**2)
+            if len_v1 < 1e-10 or len_v2 < 1e-10:
+                return json.dumps({'success': False, 'message': 'Degenerate line'})
+            v1 = [v1[0]/len_v1, v1[1]/len_v1]
+            v2 = [v2[0]/len_v2, v2[1]/len_v2]
+            
+            # Step 4: Compute perpendicular normals pointing toward INTERIOR angle
+            # For line 1: pick the normal to v1 that faces toward v2 (dot > 0)
+            n1a = [-v1[1], v1[0]]
+            n1b = [v1[1], -v1[0]]
+            n1 = n1a if (n1a[0]*v2[0] + n1a[1]*v2[1]) > 0 else n1b
+            
+            # For line 2: pick the normal to v2 that faces toward v1 (dot > 0)
+            n2a = [-v2[1], v2[0]]
+            n2b = [v2[1], -v2[0]]
+            n2 = n2a if (n2a[0]*v1[0] + n2a[1]*v1[1]) > 0 else n2b
+            
+            # Step 5: Offset lines by radius in normal direction, find center
+            off_a1 = [p1[0] + n1[0]*radius, p1[1] + n1[1]*radius]
+            off_b1 = [p2[0] + n1[0]*radius, p2[1] + n1[1]*radius]
+            off_a2 = [p3[0] + n2[0]*radius, p3[1] + n2[1]*radius]
+            off_b2 = [p4[0] + n2[0]*radius, p4[1] + n2[1]*radius]
+            
+            center = self._line_line_intersect_inf(off_a1, off_b1, off_a2, off_b2)
+            if center is None:
+                return json.dumps({'success': False, 'message': 'Cannot compute fillet center'})
+            
+            # Step 6: Tangent points — project center onto each original line
+            t1 = self._closest_point_on_inf_line(center, p1, p2)
+            t2 = self._closest_point_on_inf_line(center, p3, p4)
+            
+            # Step 7: Arc angles
+            sa = math.degrees(math.atan2(t1[1]-center[1], t1[0]-center[0]))
+            ea = math.degrees(math.atan2(t2[1]-center[1], t2[0]-center[0]))
+            
+            # Step 8: Determine arc sweep direction.
+            # ctx.arc() draws clockwise (increasing angle in Y-down screen coords).
+            # The arc must NOT pass through the intersection point.
+            # Compare midpoints of both sweeps — the correct one is farther from IX.
+            sa_n = sa % 360
+            ea_n = ea % 360
+            
+            # Clockwise sweep angle from sa_n to ea_n
+            sweep_cw = (ea_n - sa_n) % 360
+            if sweep_cw == 0:
+                sweep_cw = 360
+            
+            mid1_a = sa_n + sweep_cw / 2       # midpoint of CW sweep
+            mid2_a = sa_n - (360 - sweep_cw) / 2  # midpoint of reverse sweep
+            
+            mid1_pt = [center[0] + radius * math.cos(math.radians(mid1_a)),
+                        center[1] + radius * math.sin(math.radians(mid1_a))]
+            mid2_pt = [center[0] + radius * math.cos(math.radians(mid2_a)),
+                        center[1] + radius * math.sin(math.radians(mid2_a))]
+            
+            if self._pt_dist(mid1_pt, ix) > self._pt_dist(mid2_pt, ix):
+                # CW sweep midpoint is FARTHER from intersection -> it's the long way.
+                # Swap to use the reverse (short) sweep.
+                sa, ea = ea, sa
+            
+            # Step 9: Trim lines — move near endpoint to tangent point
+            s1_new = copy.deepcopy(s1)
+            if near1_is_p1:
+                s1_new['x1'], s1_new['y1'] = t1
+            else:
+                s1_new['x2'], s1_new['y2'] = t1
+            
+            s2_new = copy.deepcopy(s2)
+            if near2_is_p3:
+                s2_new['x1'], s2_new['y1'] = t2
+            else:
+                s2_new['x2'], s2_new['y2'] = t2
+            
+            self.pm.modify_shape(id1, s1_new)
+            self.pm.modify_shape(id2, s2_new)
+            
+            # Step 10: Add fillet arc
+            arc_shape = {
+                'type': 'arc',
+                'cx': center[0],
+                'cy': center[1],
+                'radius': radius,
+                'startAngle': sa,
+                'endAngle': ea,
+                'color': s1.get('color', '#ffffff'),
+                'layer': s1.get('layer', s2.get('layer', ''))
+            }
+            arc_id = self.pm.add_shape(arc_shape)
+            
+            return json.dumps({
+                'success': True, 'arc': True,
+                'arc_id': arc_id,
+                'center': center,
+                'tangent1': t1, 'tangent2': t2
+            })
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return json.dumps({'success': False, 'message': str(e)})
+    
+    def _line_line_intersect_inf(self, p1, p2, p3, p4):
+        """Intersect two infinite lines (not bounded to segments)."""
+        x1, y1 = p1; x2, y2 = p2
+        x3, y3 = p3; x4, y4 = p4
+        denom = (x1-x2)*(y3-y4) - (y1-y2)*(x3-x4)
+        if abs(denom) < 1e-10:
+            return None
+        t = ((x1-x3)*(y3-y4) - (y1-y3)*(x3-x4)) / denom
+        return [x1 + t*(x2-x1), y1 + t*(y2-y1)]
+    
+    def _closest_point_on_inf_line(self, pt, a, b):
+        """Project point onto infinite line through a and b."""
+        dx = b[0] - a[0]; dy = b[1] - a[1]
+        len_sq = dx*dx + dy*dy
+        if len_sq < 1e-10:
+            return list(a)
+        t = ((pt[0]-a[0])*dx + (pt[1]-a[1])*dy) / len_sq
+        return [a[0] + t*dx, a[1] + t*dy]
+    
+    def _pt_dist(self, p1, p2):
+        """Distance between two points."""
+        return math.sqrt((p2[0]-p1[0])**2 + (p2[1]-p1[1])**2)
+
+
     def copy_shapes(self, shape_ids_json, dx, dy):
         """Copy selected shapes."""
         ids = json.loads(shape_ids_json)

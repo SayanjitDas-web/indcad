@@ -1090,6 +1090,684 @@ class BlockInsertTool extends BaseTool {
 }
 
 // ═══════════════════════════════════════════════════
+// ArrayTool (AutoCAD-style Rectangular & Polar Array)
+// ═══════════════════════════════════════════════════
+
+class ArrayTool extends BaseTool {
+    constructor(manager) {
+        super(manager);
+        this._ids = [];
+        this._baseShapes = [];
+        this._mode = 'rectangular'; // 'rectangular' | 'polar'
+        this._state = 'configure'; // 'configure' | 'pick_center' | 'preview'
+
+        // Rectangular params
+        this._rows = 3;
+        this._cols = 3;
+        this._rowSpacing = 50;
+        this._colSpacing = 50;
+
+        // Polar params
+        this._count = 6;
+        this._totalAngle = 360; // degrees
+        this._rotateItems = true;
+        this._center = null;
+    }
+
+    activate() {
+        this._ids = [...this.engine.selectedIds];
+        if (this._ids.length === 0) {
+            alert('Select objects to array first!');
+            this.manager.setTool('select');
+            return;
+        }
+        this._baseShapes = this.engine.shapes.filter(s => this._ids.includes(s.id));
+        this._state = 'configure';
+        this._center = null;
+        this.engine.canvas.style.cursor = 'crosshair';
+
+        // Ask for mode
+        this._showModePrompt();
+    }
+
+    _showModePrompt() {
+        const mode = prompt(
+            'Array Mode:\n' +
+            '  R = Rectangular (rows & columns)\n' +
+            '  P = Polar (copies around center)\n\n' +
+            'Enter R or P:', 'R'
+        );
+        if (!mode) {
+            this.manager.setTool('select');
+            return;
+        }
+
+        if (mode.toUpperCase() === 'P') {
+            this._mode = 'polar';
+            this._configurePolar();
+        } else {
+            this._mode = 'rectangular';
+            this._configureRectangular();
+        }
+    }
+
+    // ─── Rectangular Array ─────────────────────────────
+    _configureRectangular() {
+        const rows = prompt('Number of Rows (vertical):', this._rows);
+        if (!rows) { this.manager.setTool('select'); return; }
+        this._rows = Math.max(1, parseInt(rows) || 1);
+
+        const cols = prompt('Number of Columns (horizontal):', this._cols);
+        if (!cols) { this.manager.setTool('select'); return; }
+        this._cols = Math.max(1, parseInt(cols) || 1);
+
+        const rowSpacing = prompt('Row Spacing (Y distance):', this._rowSpacing);
+        if (rowSpacing === null) { this.manager.setTool('select'); return; }
+        this._rowSpacing = parseFloat(rowSpacing) || 50;
+
+        const colSpacing = prompt('Column Spacing (X distance):', this._colSpacing);
+        if (colSpacing === null) { this.manager.setTool('select'); return; }
+        this._colSpacing = parseFloat(colSpacing) || 50;
+
+        // Show preview immediately
+        this._state = 'preview';
+        this._generateRectPreview();
+        const total = this._rows * this._cols - 1;
+        document.getElementById('status-tool').textContent =
+            `📐 Rect Array: ${this._rows}×${this._cols} = ${total} copies | [Enter: Apply] [N: Edit] [P: Polar] [Esc: Cancel]`;
+    }
+
+    _generateRectPreview() {
+        const previewShapes = [];
+        for (let r = 0; r < this._rows; r++) {
+            for (let c = 0; c < this._cols; c++) {
+                if (r === 0 && c === 0) continue; // Skip original position
+                const dx = c * this._colSpacing;
+                const dy = r * this._rowSpacing;
+                for (const s of this._baseShapes) {
+                    const moved = this.engine._getTranslatedShape(s, dx, dy);
+                    moved.color = '#00ccff';
+                    moved.lineStyle = 'dashed';
+                    moved.opacity = 0.6;
+                    previewShapes.push(moved);
+                }
+            }
+        }
+        this.engine.preview = previewShapes;
+        this.engine.render();
+    }
+
+    async _applyRectangular() {
+        try {
+            for (let r = 0; r < this._rows; r++) {
+                for (let c = 0; c < this._cols; c++) {
+                    if (r === 0 && c === 0) continue; // Skip original
+                    const dx = c * this._colSpacing;
+                    const dy = r * this._rowSpacing;
+                    // Copy at offset
+                    await this.engine.api.copy_shapes(JSON.stringify(this._ids), dx, dy);
+                }
+            }
+            if (this.manager.onProjectUpdated) this.manager.onProjectUpdated();
+            this.engine.preview = null;
+            this.manager.setTool('select');
+        } catch (e) {
+            console.error('Rectangular array failed:', e);
+        }
+    }
+
+    // ─── Polar Array ───────────────────────────────────
+    _configurePolar() {
+        const count = prompt('Number of Items (including original):', this._count);
+        if (!count) { this.manager.setTool('select'); return; }
+        this._count = Math.max(2, parseInt(count) || 6);
+
+        const angle = prompt('Total Angle (degrees, 360 = full circle):', this._totalAngle);
+        if (angle === null) { this.manager.setTool('select'); return; }
+        this._totalAngle = parseFloat(angle) || 360;
+
+        const rotate = prompt('Rotate items as copied? (Y/N):', 'Y');
+        this._rotateItems = !rotate || rotate.toUpperCase() !== 'N';
+
+        // Need center point
+        this._state = 'pick_center';
+        document.getElementById('status-tool').textContent = '📐 Polar Array: Click center point of rotation';
+    }
+
+    _generatePolarPreview() {
+        if (!this._center) return;
+
+        const previewShapes = [];
+        const angleStep = this._totalAngle / this._count;
+
+        // Compute centroid of selection for rotation origin
+        const bbox = this._getSelectionBBox();
+
+        for (let i = 1; i < this._count; i++) {
+            const angleDeg = angleStep * i;
+            const angleRad = (angleDeg * Math.PI) / 180;
+
+            for (const s of this._baseShapes) {
+                // Translate to rotate around center
+                let preview;
+                if (this._rotateItems) {
+                    // Rotate shape AND its position around center
+                    preview = this._rotateShapeAroundCenter(s, this._center, angleRad);
+                } else {
+                    // Only move position in a circle, don't rotate the shape itself
+                    preview = this._translateShapeAroundCenter(s, this._center, angleRad, bbox);
+                }
+                preview.color = '#ff66cc';
+                preview.lineStyle = 'dashed';
+                preview.opacity = 0.6;
+                previewShapes.push(preview);
+            }
+        }
+
+        // Draw center marker
+        previewShapes.push({
+            type: 'circle', cx: this._center.x, cy: this._center.y,
+            radius: 5 / this.engine.zoom,
+            color: '#ffcc00', lineStyle: 'solid'
+        });
+        // Draw radius line to first shape
+        if (bbox) {
+            previewShapes.push({
+                type: 'line',
+                x1: this._center.x, y1: this._center.y,
+                x2: bbox.cx, y2: bbox.cy,
+                color: '#ffcc00', lineStyle: 'dashed'
+            });
+        }
+
+        this.engine.preview = previewShapes;
+        this.engine.render();
+    }
+
+    _getSelectionBBox() {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        const expand = (x, y) => {
+            minX = Math.min(minX, x); minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+        };
+        for (const s of this._baseShapes) {
+            switch (s.type) {
+                case 'line':
+                    expand(s.x1, s.y1); expand(s.x2, s.y2);
+                    break;
+                case 'rectangle':
+                case 'text':
+                    expand(s.x, s.y); expand(s.x + (s.width || 0), s.y + (s.height || 0));
+                    break;
+                case 'circle':
+                    expand(s.cx - s.radius, s.cy - s.radius);
+                    expand(s.cx + s.radius, s.cy + s.radius);
+                    break;
+                case 'arc':
+                case 'ellipse':
+                    const rx = s.rx || s.radius || 0;
+                    const ry = s.ry || s.radius || 0;
+                    expand(s.cx - rx, s.cy - ry);
+                    expand(s.cx + rx, s.cy + ry);
+                    break;
+                case 'polyline':
+                    (s.points || []).forEach(p => { expand(p[0], p[1]); });
+                    break;
+            }
+        }
+        if (minX === Infinity) return null;
+        return {
+            x: minX, y: minY, w: maxX - minX, h: maxY - minY,
+            cx: (minX + maxX) / 2, cy: (minY + maxY) / 2
+        };
+    }
+
+    _rotateShapeAroundCenter(shape, center, angleRad) {
+        // Deep clone & rotate all coordinates around center
+        const s = JSON.parse(JSON.stringify(shape));
+        const cos = Math.cos(angleRad);
+        const sin = Math.sin(angleRad);
+
+        const rotPt = (x, y) => {
+            const dx = x - center.x;
+            const dy = y - center.y;
+            return {
+                x: center.x + dx * cos - dy * sin,
+                y: center.y + dx * sin + dy * cos
+            };
+        };
+
+        switch (s.type) {
+            case 'line': {
+                const p1 = rotPt(s.x1, s.y1);
+                const p2 = rotPt(s.x2, s.y2);
+                s.x1 = p1.x; s.y1 = p1.y;
+                s.x2 = p2.x; s.y2 = p2.y;
+                break;
+            }
+            case 'rectangle':
+            case 'text': {
+                // Rectangles: rotate center, return as-is (approximate for preview)
+                const w = s.width || 0, h = s.height || 0;
+                const cx = s.x + w / 2, cy = s.y + h / 2;
+                const rc = rotPt(cx, cy);
+                s.x = rc.x - w / 2;
+                s.y = rc.y - h / 2;
+                break;
+            }
+            case 'circle':
+            case 'arc':
+            case 'ellipse': {
+                const rc = rotPt(s.cx, s.cy);
+                s.cx = rc.x;
+                s.cy = rc.y;
+                if (s.type === 'arc') {
+                    const aDeg = (angleRad * 180) / Math.PI;
+                    s.startAngle = (s.startAngle || 0) + aDeg;
+                    s.endAngle = (s.endAngle || 0) + aDeg;
+                }
+                break;
+            }
+            case 'polyline': {
+                s.points = (s.points || []).map(p => {
+                    const rp = rotPt(p[0], p[1]);
+                    return [rp.x, rp.y];
+                });
+                break;
+            }
+        }
+        return s;
+    }
+
+    _translateShapeAroundCenter(shape, center, angleRad, bbox) {
+        if (!bbox) return JSON.parse(JSON.stringify(shape));
+        // Move shape so its bounding-box center orbits around center
+        const cos = Math.cos(angleRad);
+        const sin = Math.sin(angleRad);
+        const dx = bbox.cx - center.x;
+        const dy = bbox.cy - center.y;
+        const newCx = center.x + dx * cos - dy * sin;
+        const newCy = center.y + dx * sin + dy * cos;
+        const offsetX = newCx - bbox.cx;
+        const offsetY = newCy - bbox.cy;
+        return this.engine._getTranslatedShape(shape, offsetX, offsetY);
+    }
+
+    async _applyPolar() {
+        if (!this._center) return;
+        try {
+            const angleStep = this._totalAngle / this._count;
+            const bbox = this._getSelectionBBox();
+
+            for (let i = 1; i < this._count; i++) {
+                const angleDeg = angleStep * i;
+                const angleRad = (angleDeg * Math.PI) / 180;
+
+                if (this._rotateItems) {
+                    // Copy + rotate around center
+                    const res = await this.engine.api.copy_shapes(
+                        JSON.stringify(this._ids), 0, 0
+                    );
+                    const data = JSON.parse(res);
+                    if (data.success && data.ids) {
+                        await this.engine.api.rotate_shapes(
+                            JSON.stringify(data.ids),
+                            JSON.stringify([this._center.x, this._center.y]),
+                            angleDeg
+                        );
+                    }
+                } else {
+                    // Copy + translate to orbital position
+                    if (bbox) {
+                        const cos = Math.cos(angleRad);
+                        const sin = Math.sin(angleRad);
+                        const dx = bbox.cx - this._center.x;
+                        const dy = bbox.cy - this._center.y;
+                        const newCx = this._center.x + dx * cos - dy * sin;
+                        const newCy = this._center.y + dx * sin + dy * cos;
+                        const offsetX = newCx - bbox.cx;
+                        const offsetY = newCy - bbox.cy;
+                        await this.engine.api.copy_shapes(
+                            JSON.stringify(this._ids), offsetX, offsetY
+                        );
+                    }
+                }
+            }
+
+            if (this.manager.onProjectUpdated) this.manager.onProjectUpdated();
+            this.engine.preview = null;
+            this.manager.setTool('select');
+        } catch (e) {
+            console.error('Polar array failed:', e);
+        }
+    }
+
+    // ─── Mouse Handlers ────────────────────────────────
+    onMouseDown(world) {
+        const snapped = this.manager.applySnap(world);
+
+        if (this._state === 'pick_center') {
+            this._center = { ...snapped };
+            this._state = 'preview';
+            this._generatePolarPreview();
+            const total = this._count - 1;
+            document.getElementById('status-tool').textContent =
+                `📐 Polar Array: ${this._count} items, ${this._totalAngle}° | [Enter: Apply] [N: Edit] [R: Rect] [Esc: Cancel]`;
+        } else if (this._state === 'preview') {
+            // Click = apply
+            this._apply();
+        }
+    }
+
+    onMouseMove(world) {
+        if (this._state === 'pick_center') {
+            const snapped = this.manager.applySnap(world);
+            // Show live center preview
+            const bbox = this._getSelectionBBox();
+            const previewShapes = [];
+            if (bbox) {
+                previewShapes.push({
+                    type: 'line',
+                    x1: snapped.x, y1: snapped.y,
+                    x2: bbox.cx, y2: bbox.cy,
+                    color: '#ffcc00', lineStyle: 'dashed'
+                });
+            }
+            previewShapes.push({
+                type: 'circle', cx: snapped.x, cy: snapped.y,
+                radius: 5 / this.engine.zoom,
+                color: '#ffcc00', lineStyle: 'solid'
+            });
+            this.engine.preview = previewShapes;
+            this.engine.render();
+        }
+    }
+
+    onKeyDown(key, e) {
+        if (key === 'Escape') {
+            this.engine.preview = null;
+            this.manager.setTool('select');
+            return true;
+        }
+
+        if (this._state === 'preview') {
+            if (key === 'Enter') {
+                this._apply();
+                return true;
+            }
+            if (key.toLowerCase() === 'n') {
+                // Re-edit parameters
+                if (this._mode === 'rectangular') {
+                    this._configureRectangular();
+                } else {
+                    this._configurePolar();
+                }
+                return true;
+            }
+            if (key.toLowerCase() === 'r' && this._mode === 'polar') {
+                this._mode = 'rectangular';
+                this._configureRectangular();
+                return true;
+            }
+            if (key.toLowerCase() === 'p' && this._mode === 'rectangular') {
+                this._mode = 'polar';
+                this._configurePolar();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    _apply() {
+        if (this._mode === 'rectangular') {
+            this._applyRectangular();
+        } else {
+            this._applyPolar();
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════
+// FilletTool (Round corners between two lines)
+// ═══════════════════════════════════════════════════
+
+class FilletTool extends BaseTool {
+    constructor(manager) {
+        super(manager);
+        this._radius = 10;
+        this._firstShape = null;
+        this._firstClickPt = null;
+    }
+
+    activate() {
+        this._firstShape = null;
+        this._firstClickPt = null;
+        this.engine.canvas.style.cursor = 'crosshair';
+
+        // Prompt for radius
+        const r = prompt('Fillet radius (0 = sharp corner):', this._radius);
+        if (r === null) {
+            this.manager.setTool('select');
+            return;
+        }
+        this._radius = Math.max(0, parseFloat(r) || 0);
+        document.getElementById('status-tool').textContent =
+            `⭕ Fillet (r=${this._radius}): Select first line`;
+    }
+
+    onMouseMove(world) {
+        // Highlight shapes on hover
+        const hit = this.engine.hitTest(world);
+        this.engine.hoveredId = hit ? hit.id : null;
+
+        if (this._firstShape && hit && hit.id !== this._firstShape.id) {
+            // Show live preview arc between the two lines
+            const s2 = this.engine.shapes.find(s => s.id === hit.id);
+            if (s2 && s2.type === 'line') {
+                this._showPreview(this._firstShape, s2, world);
+            } else {
+                this.engine.preview = null;
+            }
+        } else if (!this._firstShape) {
+            this.engine.preview = null;
+        } else if (this._firstShape && (!hit || hit.id === this._firstShape.id)) {
+            this.engine.preview = null;
+        }
+
+        this.engine.render();
+    }
+
+    async onMouseDown(world) {
+        const hit = this.engine.hitTest(world);
+        if (!hit) return;
+
+        const shape = this.engine.shapes.find(s => s.id === hit.id);
+        if (!shape || shape.type !== 'line') {
+            document.getElementById('status-tool').textContent =
+                `⭕ Fillet (r=${this._radius}): Please select a LINE`;
+            return;
+        }
+
+        if (!this._firstShape) {
+            // First selection
+            this._firstShape = shape;
+            this._firstClickPt = { ...world };
+            this.engine.selectedIds = new Set([shape.id]);
+            if (this.manager.onSelectionChanged) this.manager.onSelectionChanged([shape.id]);
+            document.getElementById('status-tool').textContent =
+                `⭕ Fillet (r=${this._radius}): Select second line`;
+        } else {
+            if (shape.id === this._firstShape.id) return;
+
+            // Apply fillet
+            try {
+                const res = await this.engine.api.fillet_shapes(
+                    this._firstShape.id, shape.id,
+                    this._radius,
+                    world.x, world.y
+                );
+                const data = JSON.parse(res);
+                if (data.success) {
+                    if (this.manager.onProjectUpdated) this.manager.onProjectUpdated();
+                    this.engine.preview = null;
+                    this._firstShape = null;
+                    this._firstClickPt = null;
+                    this.engine.selectedIds.clear();
+                    document.getElementById('status-tool').textContent =
+                        `⭕ Fillet (r=${this._radius}): Select first line (or Esc to exit)`;
+                } else {
+                    document.getElementById('status-tool').textContent =
+                        `⭕ Fillet: ${data.message || 'Failed'}`;
+                }
+            } catch (e) {
+                console.error('Fillet failed:', e);
+                document.getElementById('status-tool').textContent =
+                    `⭕ Fillet: Error - ${e.message || e}`;
+            }
+        }
+    }
+
+    _showPreview(s1, s2, mouseWorld) {
+        const p1 = [s1.x1, s1.y1], p2 = [s1.x2, s1.y2];
+        const p3 = [s2.x1, s2.y1], p4 = [s2.x2, s2.y2];
+
+        // Step 1: Find infinite line intersection
+        const ix = this._lineLineInf(p1[0], p1[1], p2[0], p2[1],
+            p3[0], p3[1], p4[0], p4[1]);
+        if (!ix) return;
+
+        if (this._radius < 1e-6) {
+            this.engine.preview = [{
+                type: 'circle', cx: ix[0], cy: ix[1],
+                radius: 4 / this.engine.zoom,
+                color: '#ffcc00', lineStyle: 'solid'
+            }];
+            return;
+        }
+
+        const dist = (a, b) => Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2);
+
+        // Step 2: Determine far endpoints (away from IX = segments we keep)
+        const far1 = dist(p1, ix) >= dist(p2, ix) ? p1 : p2;
+        const far2 = dist(p3, ix) >= dist(p4, ix) ? p3 : p4;
+
+        // Step 3: Direction vectors from IX toward far endpoints
+        let v1 = [far1[0] - ix[0], far1[1] - ix[1]];
+        let v2 = [far2[0] - ix[0], far2[1] - ix[1]];
+        const lenV1 = Math.sqrt(v1[0] ** 2 + v1[1] ** 2);
+        const lenV2 = Math.sqrt(v2[0] ** 2 + v2[1] ** 2);
+        if (lenV1 < 1e-10 || lenV2 < 1e-10) return;
+        v1 = [v1[0] / lenV1, v1[1] / lenV1];
+        v2 = [v2[0] / lenV2, v2[1] / lenV2];
+
+        // Step 4: Perpendicular normals pointing toward INTERIOR angle
+        const n1a = [-v1[1], v1[0]];
+        const n1b = [v1[1], -v1[0]];
+        const n1 = (n1a[0] * v2[0] + n1a[1] * v2[1]) > 0 ? n1a : n1b;
+
+        const n2a = [-v2[1], v2[0]];
+        const n2b = [v2[1], -v2[0]];
+        const n2 = (n2a[0] * v1[0] + n2a[1] * v1[1]) > 0 ? n2a : n2b;
+
+        // Step 5: Offset lines by radius, find center
+        const off1a = [p1[0] + n1[0] * this._radius, p1[1] + n1[1] * this._radius];
+        const off1b = [p2[0] + n1[0] * this._radius, p2[1] + n1[1] * this._radius];
+        const off2a = [p3[0] + n2[0] * this._radius, p3[1] + n2[1] * this._radius];
+        const off2b = [p4[0] + n2[0] * this._radius, p4[1] + n2[1] * this._radius];
+
+        const center = this._lineLineInf(off1a[0], off1a[1], off1b[0], off1b[1],
+            off2a[0], off2a[1], off2b[0], off2b[1]);
+        if (!center) return;
+
+        // Step 6: Tangent points
+        const t1 = this._projectOnLine(center, p1, p2);
+        const t2 = this._projectOnLine(center, p3, p4);
+
+        // Step 7: Arc angles
+        let sa = Math.atan2(t1[1] - center[1], t1[0] - center[0]) * 180 / Math.PI;
+        let ea = Math.atan2(t2[1] - center[1], t2[0] - center[0]) * 180 / Math.PI;
+
+        // Step 8: Arc direction — sweep must NOT pass through intersection
+        const saN = ((sa % 360) + 360) % 360;
+        const eaN = ((ea % 360) + 360) % 360;
+        let sweepCW = ((eaN - saN) % 360 + 360) % 360;
+        if (sweepCW === 0) sweepCW = 360;
+
+        const mid1A = saN + sweepCW / 2;
+        const mid2A = saN - (360 - sweepCW) / 2;
+
+        const mid1 = [center[0] + this._radius * Math.cos(mid1A * Math.PI / 180),
+        center[1] + this._radius * Math.sin(mid1A * Math.PI / 180)];
+        const mid2 = [center[0] + this._radius * Math.cos(mid2A * Math.PI / 180),
+        center[1] + this._radius * Math.sin(mid2A * Math.PI / 180)];
+
+        if (dist(mid1, ix) > dist(mid2, ix)) {
+            [sa, ea] = [ea, sa];
+        }
+
+        this.engine.preview = [
+            {
+                type: 'arc', cx: center[0], cy: center[1],
+                radius: this._radius,
+                startAngle: sa, endAngle: ea,
+                color: '#00ff88', lineStyle: 'solid'
+            },
+            {
+                type: 'circle', cx: center[0], cy: center[1],
+                radius: 3 / this.engine.zoom,
+                color: '#ffcc00', lineStyle: 'solid'
+            },
+            {
+                type: 'circle', cx: t1[0], cy: t1[1],
+                radius: 3 / this.engine.zoom,
+                color: '#ff6600', lineStyle: 'solid'
+            },
+            {
+                type: 'circle', cx: t2[0], cy: t2[1],
+                radius: 3 / this.engine.zoom,
+                color: '#ff6600', lineStyle: 'solid'
+            }
+        ];
+    }
+
+    _lineLineInf(x1, y1, x2, y2, x3, y3, x4, y4) {
+        const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+        if (Math.abs(denom) < 1e-10) return null;
+        const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
+        return [x1 + t * (x2 - x1), y1 + t * (y2 - y1)];
+    }
+
+    _projectOnLine(pt, a, b) {
+        const dx = b[0] - a[0], dy = b[1] - a[1];
+        const lenSq = dx * dx + dy * dy;
+        if (lenSq < 1e-10) return [...a];
+        const t = ((pt[0] - a[0]) * dx + (pt[1] - a[1]) * dy) / lenSq;
+        return [a[0] + t * dx, a[1] + t * dy];
+    }
+
+    onKeyDown(key) {
+        if (key === 'Escape') {
+            this.engine.preview = null;
+            this.engine.hoveredId = null;
+            this._firstShape = null;
+            this.engine.selectedIds.clear();
+            this.manager.setTool('select');
+            return true;
+        }
+        if (key.toLowerCase() === 'r') {
+            const r = prompt('New fillet radius:', this._radius);
+            if (r !== null) {
+                this._radius = Math.max(0, parseFloat(r) || 0);
+                document.getElementById('status-tool').textContent =
+                    `⭕ Fillet (r=${this._radius}): Select first line`;
+            }
+            return true;
+        }
+        return false;
+    }
+}
+
+// ═══════════════════════════════════════════════════
 // ToolManager
 // ═══════════════════════════════════════════════════
 
@@ -1145,6 +1823,8 @@ class ToolManager {
             createBlock: new BlockCreateTool(this),
             insertBlock: new BlockInsertTool(this),
             erase: new EraseTool(this),
+            array: new ArrayTool(this),
+            fillet: new FilletTool(this),
         };
     }
 
