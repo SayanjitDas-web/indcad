@@ -17,7 +17,9 @@ class PanelsManager {
         this.onToggleVisibility = null;
         this.onToggleLock = null;
         this.onRenameLayer = null;
+        this.onChangeLayerColor = null;
         this.onPropertyChanged = null;
+        this.onChangeShapeLayer = null;
         this.onInsertBlock = null;
         this.onPublishToLibrary = null;
         this.onImportFromLibrary = null;
@@ -29,6 +31,7 @@ class PanelsManager {
         this.blockTab = 'project';
         this.activeLayerId = null;
         this.selectedShapes = [];
+        this.allShapes = []; // All shapes in project for counting
 
         this._bindEvents();
     }
@@ -53,9 +56,10 @@ class PanelsManager {
 
     // ──────────────────────── Layers ────────────────────────
 
-    updateLayers(layers, activeLayerId) {
+    updateLayers(layers, activeLayerId, allShapes) {
         this.layers = layers;
         this.activeLayerId = activeLayerId;
+        if (allShapes !== undefined) this.allShapes = allShapes;
         this._renderLayers();
     }
 
@@ -66,10 +70,36 @@ class PanelsManager {
         this.layers.forEach(layer => {
             const item = document.createElement('div');
             item.className = 'layer-item' + (layer.id === this.activeLayerId ? ' active' : '');
+            if (!layer.visible) item.classList.add('hidden-layer');
+            if (layer.locked) item.classList.add('locked-layer');
 
+            // Color swatch — clickable for color picker
             const colorSwatch = document.createElement('div');
             colorSwatch.className = 'layer-color';
             colorSwatch.style.backgroundColor = layer.color;
+            colorSwatch.title = 'Click to change color';
+            colorSwatch.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const picker = document.createElement('input');
+                picker.type = 'color';
+                picker.value = layer.color || '#ffffff';
+                picker.style.position = 'absolute';
+                picker.style.opacity = '0';
+                picker.style.width = '0';
+                picker.style.height = '0';
+                document.body.appendChild(picker);
+                picker.addEventListener('input', () => {
+                    colorSwatch.style.backgroundColor = picker.value;
+                });
+                picker.addEventListener('change', () => {
+                    if (this.onChangeLayerColor) this.onChangeLayerColor(layer.id, picker.value);
+                    picker.remove();
+                });
+                picker.addEventListener('blur', () => {
+                    setTimeout(() => picker.remove(), 100);
+                });
+                picker.click();
+            });
 
             const nameSpan = document.createElement('span');
             nameSpan.className = 'layer-name';
@@ -78,6 +108,13 @@ class PanelsManager {
                 e.stopPropagation();
                 this._startRename(layer, nameSpan);
             });
+
+            // Shape count badge
+            const count = (this.allShapes || []).filter(s => s.layer === layer.id).length;
+            const badge = document.createElement('span');
+            badge.className = 'layer-badge';
+            badge.textContent = count;
+            badge.title = `${count} shape${count !== 1 ? 's' : ''}`;
 
             const visBtn = document.createElement('button');
             visBtn.className = 'layer-toggle' + (layer.visible ? '' : ' off');
@@ -108,6 +145,7 @@ class PanelsManager {
 
             item.appendChild(colorSwatch);
             item.appendChild(nameSpan);
+            item.appendChild(badge);
             item.appendChild(visBtn);
             item.appendChild(lockBtn);
             item.appendChild(delBtn);
@@ -357,6 +395,29 @@ class PanelsManager {
         styleGroup.appendChild(styleRow);
 
         container.appendChild(styleGroup);
+
+        // Layer assignment
+        if (this.layers && this.layers.length > 0) {
+            const layerGroup = this._createGroup('Layer');
+            const layerRow = document.createElement('div');
+            layerRow.className = 'prop-row';
+            layerRow.innerHTML = `<span class="prop-label">Layer</span>`;
+            const layerSelect = document.createElement('select');
+            layerSelect.className = 'prop-select';
+            this.layers.forEach(l => {
+                const opt = document.createElement('option');
+                opt.value = l.id;
+                opt.textContent = l.name;
+                if (shape.layer === l.id) opt.selected = true;
+                layerSelect.appendChild(opt);
+            });
+            layerSelect.addEventListener('change', () => {
+                if (this.onChangeShapeLayer) this.onChangeShapeLayer(shape.id, layerSelect.value);
+            });
+            layerRow.appendChild(layerSelect);
+            layerGroup.appendChild(layerRow);
+            container.appendChild(layerGroup);
+        }
     }
 
     _createGroup(title) {

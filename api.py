@@ -419,6 +419,11 @@ class Api:
         result = self.pm.rename_layer(layer_id, new_name)
         return json.dumps({'success': result})
 
+    def change_layer_color(self, layer_id, color):
+        result = self.pm.change_layer_color(layer_id, color)
+        return json.dumps({'success': result, 'layers': self.pm.project['layers']})
+
+
     # ──────────────────────── Geometry / Snap ────────────────────────
 
     def calculate_snap(self, point_json, radius_json, base_point_json=None):

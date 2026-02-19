@@ -638,6 +638,56 @@ body {
     opacity: 0.3;
 }
 
+.layer-item.hidden-layer {
+    opacity: 0.45;
+}
+
+.layer-item.hidden-layer .layer-name {
+    text-decoration: line-through;
+    color: var(--text-muted);
+}
+
+.layer-item.locked-layer .layer-name::after {
+    content: ' 🔒';
+    font-size: 9px;
+}
+
+.layer-color {
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.layer-color:hover {
+    transform: scale(1.3);
+    box-shadow: 0 0 6px rgba(255, 255, 255, 0.3);
+}
+
+.layer-badge {
+    font-size: 10px;
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    padding: 1px 5px;
+    min-width: 16px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.prop-select {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    font-size: 12px;
+    border-radius: 4px;
+    padding: 3px 6px;
+    flex: 1;
+    outline: none;
+}
+
+.prop-select:focus {
+    border-color: var(--accent);
+}
+
 /* ─── Properties ─── */
 .prop-empty {
     padding: 20px;

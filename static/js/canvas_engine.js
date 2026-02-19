@@ -26,6 +26,12 @@ class CanvasEngine {
         this.measureLine = null;  // for measure tool display
         this.blockDefinitions = {}; // { name: [shapes...] }
 
+        // Layer awareness
+        this.layers = [];
+        this._hiddenLayers = new Set();
+        this._lockedLayers = new Set();
+        this._layerMap = {};  // layerId -> layer object
+
         // Interaction
         this._isPanning = false;
         this._panStart = null;
@@ -202,11 +208,22 @@ class CanvasEngine {
         const tol = tolerance / this.zoom;
         for (let i = this.shapes.length - 1; i >= 0; i--) {
             const shape = this.shapes[i];
+            if (this._isShapeHidden(shape)) continue;
             if (this._hitTestShape(shape, worldPos, tol)) {
                 return shape;
             }
         }
         return null;
+    }
+
+    isShapeLocked(shape) {
+        if (!shape) return false;
+        const layerId = shape.layer;
+        return layerId ? this._lockedLayers.has(layerId) : false;
+    }
+
+    isActiveLayerLocked() {
+        return this._lockedLayers.has(this._activeLayerId || '');
     }
 
     _hitTestShape(shape, pos, tol) {
@@ -304,7 +321,7 @@ class CanvasEngine {
 
         // 1. Static Shape Snaps (Endpoint, Midpoint, Center, Quadrant)
         for (const shape of this.shapes) {
-            if (shape._hidden) continue;
+            if (shape._hidden || this._isShapeHidden(shape)) continue;
             const points = this._getSnapPointsForShape(shape, settings);
             for (const sp of points) {
                 checkPoint(sp.point, sp.type);
@@ -315,9 +332,9 @@ class CanvasEngine {
         if (isEnabled('intersection') && (bestSnap === null || minDist > 5 / this.zoom)) {
             const n = this.shapes.length;
             for (let i = 0; i < n; i++) {
-                if (this.shapes[i]._hidden) continue;
+                if (this.shapes[i]._hidden || this._isShapeHidden(this.shapes[i])) continue;
                 for (let j = i + 1; j < n; j++) {
-                    if (this.shapes[j]._hidden) continue;
+                    if (this.shapes[j]._hidden || this._isShapeHidden(this.shapes[j])) continue;
                     const inters = this._getIntersections(this.shapes[i], this.shapes[j]);
                     for (const pt of inters) checkPoint(pt, 'intersection');
                 }
@@ -330,7 +347,7 @@ class CanvasEngine {
 
             if (isEnabled('perpendicular')) {
                 for (const shape of this.shapes) {
-                    if (shape._hidden) continue;
+                    if (shape._hidden || this._isShapeHidden(shape)) continue;
                     const segs = Geometry.getSegments(shape);
                     for (const seg of segs) {
                         const perp = Geometry.perpendicularPoint(bp, seg[0], seg[1]);
@@ -341,7 +358,7 @@ class CanvasEngine {
 
             if (isEnabled('tangent')) {
                 for (const shape of this.shapes) {
-                    if (shape._hidden || (shape.type !== 'circle' && shape.type !== 'arc')) continue;
+                    if (shape._hidden || this._isShapeHidden(shape) || (shape.type !== 'circle' && shape.type !== 'arc')) continue;
                     const center = [shape.cx, shape.cy];
                     const tpts = Geometry.calculateTangentPoints(bp, center, shape.radius);
                     for (const tp of tpts) {
@@ -357,7 +374,7 @@ class CanvasEngine {
 
         if (isEnabled('extension')) {
             for (const shape of this.shapes) {
-                if (shape._hidden || shape.type !== 'line') continue;
+                if (shape._hidden || this._isShapeHidden(shape) || shape.type !== 'line') continue;
                 const p1 = [shape.x1, shape.y1], p2 = [shape.x2, shape.y2];
                 const perp = Geometry.perpendicularPoint([worldPos.x, worldPos.y], p1, p2);
                 const dToLine = Geometry.dist(perp, [worldPos.x, worldPos.y]);
@@ -378,7 +395,7 @@ class CanvasEngine {
         // 4. Nearest Snap (Lowest Priority)
         if (isEnabled('nearest') && (bestSnap === null || minDist > 8 / this.zoom)) {
             for (const shape of this.shapes) {
-                if (shape._hidden) continue;
+                if (shape._hidden || this._isShapeHidden(shape)) continue;
                 this._checkNearestOnShape(shape, [worldPos.x, worldPos.y], checkPoint);
             }
         }
@@ -538,6 +555,8 @@ class CanvasEngine {
     getShapesInBox(x1, y1, x2, y2, crossing = false) {
         return this.shapes.filter(s => {
             if (s._hidden) return false;
+            if (this._isShapeHidden(s)) return false;
+            if (this.isShapeLocked(s)) return false;
             return this._isShapeInBox(s, x1, y1, x2, y2, crossing);
         });
     }
@@ -685,6 +704,7 @@ class CanvasEngine {
         ctx.save();
         this.shapes.forEach(shape => {
             if (shape._hidden) return;
+            if (this._isShapeHidden(shape)) return;
             this._renderShape(shape);
         });
         ctx.restore();
@@ -1506,6 +1526,24 @@ class CanvasEngine {
 
     setShapes(shapes) {
         this.shapes = shapes;
+    }
+
+    setLayers(layers, activeLayerId) {
+        this.layers = layers || [];
+        this._activeLayerId = activeLayerId || '';
+        this._hiddenLayers.clear();
+        this._lockedLayers.clear();
+        this._layerMap = {};
+        for (const layer of this.layers) {
+            this._layerMap[layer.id] = layer;
+            if (!layer.visible) this._hiddenLayers.add(layer.id);
+            if (layer.locked) this._lockedLayers.add(layer.id);
+        }
+    }
+
+    _isShapeHidden(shape) {
+        if (!shape || !shape.layer) return false;
+        return this._hiddenLayers.has(shape.layer);
     }
 
     setSelection(ids) {

@@ -424,7 +424,19 @@ class ProjectManager:
         return True
 
     def set_active_layer(self, layer_id):
-        self.project['activeLayer'] = layer_id
+        # Validate that layer_id exists
+        if any(l['id'] == layer_id for l in self.project['layers']):
+            self.project['activeLayer'] = layer_id
+            return True
+        return False
+
+    def change_layer_color(self, layer_id, color):
+        for layer in self.project['layers']:
+            if layer['id'] == layer_id:
+                layer['color'] = color
+                self.dirty = True
+                return True
+        return False
 
     def toggle_layer_visibility(self, layer_id):
         for layer in self.project['layers']:

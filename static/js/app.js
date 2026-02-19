@@ -99,6 +99,10 @@ class IndCADApp {
 
         this.engine.setShapes(shapes);
         this.engine.setBlocks(this.projectData.blocks || {});
+        this.engine.setLayers(
+            this.projectData.layers || [],
+            this.projectData.activeLayer || 'layer-0'
+        );
         this.panels.updateBlocks(this.projectData.blocks || {});
         this._fetchLibraryBlocks();
         this.engine.render();
@@ -108,7 +112,8 @@ class IndCADApp {
         if (!this.projectData) return;
         this.panels.updateLayers(
             this.projectData.layers || [],
-            this.projectData.activeLayer || 'layer-0'
+            this.projectData.activeLayer || 'layer-0',
+            this.projectData.shapes || []
         );
     }
 
@@ -173,6 +178,13 @@ class IndCADApp {
     _connectToolCallbacks() {
         this.tools.onShapeCreated = async (shapeData) => {
             try {
+                // Block drawing on locked active layer
+                if (this.engine.isActiveLayerLocked()) {
+                    document.getElementById('status-tool').textContent = '⛔ Active layer is locked!';
+                    setTimeout(() => document.getElementById('status-tool').textContent = '', 2000);
+                    return;
+                }
+
                 // Get active layer color
                 const activeLayer = (this.projectData.layers || []).find(
                     l => l.id === this.projectData.activeLayer
@@ -297,6 +309,32 @@ class IndCADApp {
                 await this._loadProjectData();
             } catch (e) {
                 console.error('Failed to rename layer:', e);
+            }
+        };
+
+        this.panels.onChangeLayerColor = async (layerId, color) => {
+            try {
+                await this.api.change_layer_color(layerId, color);
+                await this._loadProjectData();
+            } catch (e) {
+                console.error('Failed to change layer color:', e);
+            }
+        };
+
+        this.panels.onChangeShapeLayer = async (shapeId, layerId) => {
+            try {
+                // Find the target layer's color
+                const targetLayer = (this.projectData.layers || []).find(l => l.id === layerId);
+                const changes = { layer: layerId };
+                if (targetLayer) changes.color = targetLayer.color;
+                await this.api.modify_shape(shapeId, JSON.stringify(changes));
+                await this._loadProjectData();
+                // Re-update properties
+                const selected = Array.from(this.engine.selectedIds);
+                const shapes = this.engine.shapes.filter(s => selected.includes(s.id));
+                this.panels.updateProperties(shapes);
+            } catch (e) {
+                console.error('Failed to change shape layer:', e);
             }
         };
 

@@ -45,6 +45,15 @@ class SelectTool extends BaseTool {
         this.startPos = world;
 
         if (hit) {
+            // Don't allow selecting shapes on locked layers
+            if (this.engine.isShapeLocked(hit)) {
+                if (!e.ctrlKey) this.engine.selectedIds.clear();
+                this.mode = 'box';
+                this.isDragging = true;
+                this._updateSelection();
+                return;
+            }
+
             if (e.ctrlKey) {
                 if (this.engine.selectedIds.has(hit.id)) {
                     this.engine.selectedIds.delete(hit.id);
@@ -73,7 +82,11 @@ class SelectTool extends BaseTool {
         } else {
             const hit = this.engine.hitTest(world);
             this.engine.hoveredId = hit ? hit.id : null;
-            this.engine.canvas.style.cursor = hit ? 'move' : 'default';
+            if (hit && this.engine.isShapeLocked(hit)) {
+                this.engine.canvas.style.cursor = 'not-allowed';
+            } else {
+                this.engine.canvas.style.cursor = hit ? 'move' : 'default';
+            }
             this.engine.render();
         }
     }
