@@ -441,7 +441,8 @@ class Api:
     def trim_shape(self, target_id, x, y):
         """Trim any shape at intersection points."""
         target = self.pm.get_shape_by_id(target_id)
-        if not target: return
+        if not target:
+            return json.dumps({'success': False, 'message': 'Shape not found'})
 
         click_point = [x, y]
         cutters = self.pm.project['shapes']
@@ -449,14 +450,17 @@ class Api:
         # 1. Collect all intersection points
         intersections = []
         for shape in cutters:
-            if shape['id'] == target_id: continue
+            if not isinstance(shape, dict): continue
+            if shape.get('id') == target_id: continue
             if 'type' not in shape: continue
             
-            inters = geo.get_shape_intersections(target, shape)
-            for pt in inters:
-                # Avoid duplicates and check if already in list
-                if not any(geo.distance(pt, i) < 1e-5 for i in intersections):
-                    intersections.append(pt)
+            try:
+                inters = geo.get_shape_intersections(target, shape)
+                for pt in inters:
+                    if not any(geo.distance(pt, i) < 1e-5 for i in intersections):
+                        intersections.append(pt)
+            except Exception:
+                continue  # Skip shapes that cause geometry errors
 
         if not intersections:
             return json.dumps({'success': False, 'message': 'No intersections found'})
@@ -484,7 +488,6 @@ class Api:
                 s['x2'], s['y2'] = seg['p2']
                 new_shapes.append(s)
 
-                new_shapes.append(s)
 
         elif target['type'] == 'circle' or target['type'] == 'arc' or target['type'] == 'ellipse':
             center = [target['cx'], target['cy']]
@@ -609,6 +612,8 @@ class Api:
             # Special case: trimming the last segment of a shape
             self.pm.delete_shape(target_id)
             return json.dumps({'success': True})
+
+        return json.dumps({'success': False, 'message': 'Unsupported shape type for trim'})
 
     def _remove_clicked_segment(self, segments, click_point):
         """Find segment closest to click and remove it."""
@@ -1171,6 +1176,20 @@ class Api:
             return json.dumps(result)
             
         # Fallback for simple string responses (e.g. errors or rate limits)
+        return json.dumps({'text': str(result), 'draw': []})
+
+    def ai_chat_with_image(self, prompt, image_data):
+        """Handle AI chat requests with an uploaded image (multimodal vision)."""
+        context = self._get_ai_context()
+        result = self.ai.get_chat_response_with_image(prompt, context, image_data)
+        
+        if isinstance(result, dict):
+            if result.get('draw'):
+                for shape in result['draw']:
+                    self.pm.add_shape(shape)
+                self.sync_project_to_db()
+            return json.dumps(result)
+            
         return json.dumps({'text': str(result), 'draw': []})
 
     def ai_generate_start(self, name, description):

@@ -1409,3 +1409,104 @@ body {
 .ai-input-box .btn-icon:hover {
     color: #fff;
 }
+
+/* ─── AI Image Upload ─── */
+.ai-upload-btn {
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.5);
+    cursor: pointer;
+    padding: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.25s ease;
+    flex-shrink: 0;
+}
+
+.ai-upload-btn:hover {
+    color: #fff;
+    border-color: #7c3aed;
+    background: rgba(124, 58, 237, 0.2);
+    box-shadow: 0 0 12px rgba(124, 58, 237, 0.3);
+    transform: scale(1.08);
+}
+
+.ai-upload-btn.has-image {
+    color: #7c3aed;
+    border-color: #7c3aed;
+    background: rgba(124, 58, 237, 0.15);
+}
+
+.ai-image-preview {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 15px;
+    background: rgba(124, 58, 237, 0.08);
+    border-top: 1px solid rgba(124, 58, 237, 0.2);
+    animation: fadeIn 0.2s ease;
+}
+
+.ai-image-preview.hidden {
+    display: none;
+}
+
+.preview-thumb-wrap {
+    width: 44px;
+    height: 44px;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    flex-shrink: 0;
+    background: rgba(0, 0, 0, 0.3);
+}
+
+.preview-thumb-wrap img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.preview-filename {
+    flex: 1;
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.6);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.preview-remove {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.preview-remove:hover {
+    color: #f85149;
+    background: rgba(248, 81, 73, 0.15);
+}
+
+/* Drag & Drop overlay */
+.ai-messages.dragover {
+    outline: 2px dashed #7c3aed;
+    outline-offset: -4px;
+    background: rgba(124, 58, 237, 0.06);
+}
+
+/* User message image thumbnail */
+.ai-msg-image {
+    max-width: 120px;
+    max-height: 80px;
+    border-radius: 6px;
+    margin-bottom: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    object-fit: cover;
+}

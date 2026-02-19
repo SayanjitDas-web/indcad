@@ -1,10 +1,13 @@
 import os
 import json
 import time
+import base64
+import io
 from google import genai
 from openai import OpenAI
 from collections import deque
 from dotenv import load_dotenv
+from PIL import Image
 
 class AiAssistant:
     """Handles interaction with Gemini AI and OpenRouter fallback."""
@@ -169,6 +172,79 @@ class AiAssistant:
             return self._openrouter_chat(prompt, system_instruction)
         
         return {"text": "Error: Gemini rate limit reached and no OpenRouter key provided.", "draw": []}
+
+    def get_chat_response_with_image(self, prompt, project_context, image_base64):
+        """Get assistant response for a text prompt + uploaded image (multimodal)."""
+        if not self.gemini_key:
+            return {"text": "Error: Image analysis requires a Gemini API key. OpenRouter fallback does not support vision.", "draw": []}
+
+        # Decode base64 image to PIL Image
+        try:
+            # Strip data URL prefix if present (e.g. 'data:image/png;base64,')
+            if ',' in image_base64:
+                image_base64 = image_base64.split(',', 1)[1]
+            image_bytes = base64.b64decode(image_base64)
+            pil_image = Image.open(io.BytesIO(image_bytes))
+        except Exception as e:
+            return {"text": f"Error: Could not decode uploaded image: {e}", "draw": []}
+
+        system_instruction = f"""
+        You are IndCAD AI, a professional CAD drawing assistant with VISION capabilities.
+        Current Project Context: {json.dumps(project_context)}
+        
+        The user has uploaded an IMAGE of a drawing, sketch, floor plan, or design.
+        Your job is to:
+        1. ANALYZE the image — describe what you see (shapes, dimensions, layout, text labels).
+        2. RECREATE the design as IndCAD shapes using JSON or SVG output.
+        3. Be as accurate as possible with proportions, positions, and structure.
+        
+        CRITICAL: Layer and Color Awareness:
+        - The current active layer is '{project_context.get('activeLayer', 'layer-0')}' with color '{project_context.get('activeLayerColor', '#ffffff')}'.
+        - You SHOULD use this color for your drawings by default unless the image suggests different colors.
+        - Ensure all shapes have a 'color', 'layer', and 'lineWidth' field.
+        
+        ALL Shape Types (Schema):
+        - line: x1, y1, x2, y2, color, layer, lineWidth
+        - rectangle: x, y, width, height, color, layer, lineWidth
+        - circle: cx, cy, radius, color, layer, lineWidth
+        - arc: cx, cy, radius, startAngle, endAngle, color, layer, lineWidth
+        - ellipse: cx, cy, rx, ry, color, layer, lineWidth
+        - polyline: points (array of [x,y]), closed (bool), color, layer, lineWidth
+        - text: x, y, content, fontSize, color, layer
+        
+        ADVANCED SVG MODE:
+        For complex designs (floor plans, mechanical parts, curves), output SVG:
+        ```svg
+        <svg viewBox="0 0 500 500"><!-- your design --></svg>
+        ```
+        
+        Units & Measurements:
+        The project uses dynamic CAD units (see 'settings' in context).
+        Coordinates: Center around 0,0 unless the context suggests otherwise.
+        Format: Always provide a helpful text response analyzing the image, followed by a JSON code block or SVG block to draw it.
+        """
+
+        self._current_context = project_context
+
+        if not self._check_gemini_rate_limit():
+            return {"text": "Error: Gemini rate limit reached. Please wait a moment.", "draw": []}
+
+        try:
+            # Gemini multimodal: send text + image as content parts
+            user_text = prompt if prompt else "Analyze this drawing and recreate it as CAD shapes."
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=[user_text, pil_image],
+                config={'system_instruction': system_instruction}
+            )
+            return self._parse_mixed_response(response.text)
+        except Exception as e:
+            print(f"Gemini vision error: {e}")
+            # Fallback: send text-only to OpenRouter (no image support)
+            if self.openrouter_key:
+                fallback_prompt = f"{prompt}\n\n(Note: An image was uploaded but this fallback model cannot process images. Please respond based on the text prompt only.)"
+                return self._openrouter_chat(fallback_prompt, system_instruction)
+            return {"text": f"Error: Image analysis failed: {str(e)}", "draw": []}
 
     def _openrouter_chat(self, prompt, system_instruction):
         """Fallback chat using OpenRouter (Llama 3.1) - Using OpenAI SDK."""

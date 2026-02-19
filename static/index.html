@@ -553,7 +553,22 @@
                 style="background: linear-gradient(135, #0078d4, #00d4ff);">💾 Export DXF</button>
             <p class="small-hint">Generate a starting drawing or export to machine</p>
         </div>
+        <!-- Image Preview Strip -->
+        <div id="ai-image-preview" class="ai-image-preview hidden">
+            <div class="preview-thumb-wrap">
+                <img id="ai-preview-thumb" src="" alt="preview">
+            </div>
+            <span id="ai-preview-name" class="preview-filename">image.png</span>
+            <button id="ai-preview-remove" class="preview-remove" title="Remove image">✕</button>
+        </div>
+        <!-- Hidden file input -->
+        <input type="file" id="ai-image-input" accept="image/*" style="display:none;">
         <div class="ai-input-box">
+            <button id="ai-upload-btn" class="ai-upload-btn" title="Upload drawing image">
+                <svg viewBox="0 0 24 24" width="20" height="20">
+                    <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z" fill="currentColor"/>
+                </svg>
+            </button>
             <input type="text" id="ai-input" placeholder="Ask about your design...">
             <button id="ai-send-btn" class="btn-icon">➤</button>
         </div>

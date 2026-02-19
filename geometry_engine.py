@@ -169,8 +169,6 @@ def line_arc_intersection(p1, p2, arc):
     return results
 
 
-    return results
-
 
 def line_ellipse_intersection(p1, p2, ellipse):
     """
@@ -307,7 +305,10 @@ def polygonal_intersection(s1, s2):
 
 def get_shape_intersections(s1, s2):
     """Generic dispatcher for intersections between two shapes."""
-    t1, t2 = s1['type'], s2['type']
+    t1 = s1.get('type', '')
+    t2 = s2.get('type', '')
+    if not t1 or not t2:
+        return []
     
     # Polygonal vs Polygonal (Line, Polyline, Rectangle)
     polygonal_types = ['line', 'polyline', 'rectangle']

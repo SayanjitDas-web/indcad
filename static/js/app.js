@@ -699,6 +699,7 @@ class IndCADApp {
 
         // Design mode toggle state
         this._aiDesignMode = false;
+        this._pendingImage = null; // {dataUrl, fileName}
 
         toggleBtn.addEventListener('click', () => panel.classList.toggle('hidden'));
         closeBtn.addEventListener('click', () => {
@@ -792,6 +793,48 @@ class IndCADApp {
         if (inputRow) {
             inputRow.parentElement.insertBefore(this._aiSelectionBadge, inputRow);
         }
+
+        // ── Image Upload Wiring ──
+        const uploadBtn = document.getElementById('ai-upload-btn');
+        const imageInput = document.getElementById('ai-image-input');
+        const previewBox = document.getElementById('ai-image-preview');
+        const previewThumb = document.getElementById('ai-preview-thumb');
+        const previewName = document.getElementById('ai-preview-name');
+        const previewRemove = document.getElementById('ai-preview-remove');
+        const msgArea = document.getElementById('ai-messages');
+
+        if (uploadBtn && imageInput) {
+            uploadBtn.addEventListener('click', () => imageInput.click());
+
+            imageInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) this._attachAiImage(file);
+                imageInput.value = ''; // Reset so same file can be re-selected
+            });
+
+            if (previewRemove) {
+                previewRemove.addEventListener('click', () => this._clearAiImage());
+            }
+
+            // Drag & drop on messages area
+            if (msgArea) {
+                msgArea.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    msgArea.classList.add('dragover');
+                });
+                msgArea.addEventListener('dragleave', () => {
+                    msgArea.classList.remove('dragover');
+                });
+                msgArea.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    msgArea.classList.remove('dragover');
+                    const file = e.dataTransfer.files[0];
+                    if (file && file.type.startsWith('image/')) {
+                        this._attachAiImage(file);
+                    }
+                });
+            }
+        }
     }
 
     async _handleAIChat() {
@@ -799,35 +842,52 @@ class IndCADApp {
         const msgContainer = document.getElementById('ai-messages');
         const loading = document.getElementById('ai-loading');
         const prompt = input.value.trim();
-        if (!prompt) return;
+        const hasImage = !!this._pendingImage;
+        if (!prompt && !hasImage) return;
 
         // Check if shapes are selected for context-aware generation
         const selectedIds = this._selectedShapeIds || [];
         const hasSelection = selectedIds.length > 0;
 
-        // Add user message UI with selection indicator
-        if (hasSelection) {
-            this._addAiMessage(`🎯 [${selectedIds.length} shape(s) selected] ${prompt}`, 'user');
-        } else {
-            this._addAiMessage(prompt, 'user');
+        // Build user message with optional image thumbnail
+        let userMsgHtml = '';
+        if (hasImage) {
+            userMsgHtml += `<img class="ai-msg-image" src="${this._pendingImage.dataUrl}" alt="uploaded"><br>`;
         }
+        if (hasSelection) {
+            userMsgHtml += `🎯 [${selectedIds.length} shape(s) selected] `;
+        }
+        if (hasImage && !prompt) {
+            userMsgHtml += '📷 Analyze this drawing';
+        } else {
+            userMsgHtml += this._escapeHtml(prompt);
+        }
+        this._addAiMessageRaw(userMsgHtml, 'user');
         input.value = '';
+
+        // Capture and clear pending image before async call
+        const imageData = hasImage ? this._pendingImage.dataUrl : null;
+        if (hasImage) this._clearAiImage();
 
         // Show loading
         loading.classList.remove('hidden');
         msgContainer.scrollTop = msgContainer.scrollHeight;
 
+        const effectivePrompt = prompt || 'Analyze this drawing and recreate it as CAD shapes.';
+
         try {
             let result;
-            if (hasSelection) {
-                // Selection-based generation — pass selected shape IDs + prompt
+            if (hasImage) {
+                // Multimodal: text + image
+                result = await this.api.ai_chat_with_image(effectivePrompt, imageData);
+            } else if (hasSelection) {
                 result = await this.api.ai_generate_from_selection(
-                    prompt, JSON.stringify(selectedIds)
+                    effectivePrompt, JSON.stringify(selectedIds)
                 );
             } else if (this._aiDesignMode) {
-                result = await this.api.design_with_agent(prompt);
+                result = await this.api.design_with_agent(effectivePrompt);
             } else {
-                result = await this.api.ai_chat(prompt);
+                result = await this.api.ai_chat(effectivePrompt);
             }
             const data = JSON.parse(result);
 
@@ -851,6 +911,55 @@ class IndCADApp {
         } finally {
             loading.classList.add('hidden');
         }
+    }
+
+    _attachAiImage(file) {
+        if (!file || !file.type.startsWith('image/')) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            this._pendingImage = { dataUrl: e.target.result, fileName: file.name };
+            // Show preview
+            const previewBox = document.getElementById('ai-image-preview');
+            const previewThumb = document.getElementById('ai-preview-thumb');
+            const previewName = document.getElementById('ai-preview-name');
+            const uploadBtn = document.getElementById('ai-upload-btn');
+            if (previewBox) {
+                previewThumb.src = e.target.result;
+                previewName.textContent = file.name;
+                previewBox.classList.remove('hidden');
+            }
+            if (uploadBtn) uploadBtn.classList.add('has-image');
+            // Update placeholder
+            const input = document.getElementById('ai-input');
+            if (input) input.placeholder = 'Describe what to do with this image...';
+        };
+        reader.readAsDataURL(file);
+    }
+
+    _clearAiImage() {
+        this._pendingImage = null;
+        const previewBox = document.getElementById('ai-image-preview');
+        const uploadBtn = document.getElementById('ai-upload-btn');
+        if (previewBox) previewBox.classList.add('hidden');
+        if (uploadBtn) uploadBtn.classList.remove('has-image');
+        const input = document.getElementById('ai-input');
+        if (input) input.placeholder = 'Ask about your design...';
+    }
+
+    _escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    _addAiMessageRaw(htmlContent, type) {
+        const msgContainer = document.getElementById('ai-messages');
+        const loading = document.getElementById('ai-loading');
+        const msgDiv = document.createElement('div');
+        msgDiv.className = `ai-msg ${type}`;
+        msgDiv.innerHTML = htmlContent;
+        msgContainer.insertBefore(msgDiv, loading);
+        msgContainer.scrollTop = msgContainer.scrollHeight;
     }
 
     async _handleAIMagicStart() {
